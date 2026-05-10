@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "manimind"
+version = "0.1.0"
+description = "Multi-agent orchestration for mathematical explainer animation production."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+pdf = [
+  "pypdf>=5.0.0",
+]
+llm = [
+  "openai>=1.30.0",
+]
+api = [
+  "fastapi>=0.111.0",
+  "uvicorn>=0.30.0",
+]
+render = [
+  "manim>=0.19.0",
+  "manim-voiceover[gtts]>=0.3.7",
+]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

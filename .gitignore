@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Environment
+.env
+
+# Runtime artifacts
+runtime/cache/*
+!runtime/cache/.gitkeep
+runtime/projects/*
+!runtime/projects/.gitkeep
+runtime/sessions/*
+!runtime/sessions/.gitkeep
+runtime/bootstrap-report.json
+runtime/doctor-report.json
+runtime/thirdparty-sync-report.json
+outputs/*
+!outputs/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Media exports
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.srt
+*.ass
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.bak

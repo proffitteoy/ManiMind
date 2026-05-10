@@ -1,0 +1,40 @@
+{
+  "project_id": "riemann-zeta-intro",
+  "title": "黎曼猜想入门科普",
+  "source_bundle": {
+    "paper_path": "inputs/papers/riemann-zeta.pdf",
+    "note_paths": [
+      "inputs/notes/outline.md"
+    ],
+    "audience": "高中及本科低年级观众",
+    "style_refs": [
+      "先直觉后公式",
+      "偏明亮的科普视觉"
+    ]
+  },
+  "segments": [
+    {
+      "id": "seg-01",
+      "title": "问题引入",
+      "goal": "解释为什么质数分布值得研究",
+      "narration": "我们关心的是质数出现的节奏，而不是单个质数本身。",
+      "modality": "html",
+      "html_motion_notes": [
+        "使用概念流程卡片",
+        "避免复杂公式"
+      ],
+      "estimated_seconds": 18
+    },
+    {
+      "id": "seg-02",
+      "title": "ζ 函数定义",
+      "goal": "介绍 zeta 函数与解析延拓的直觉位置",
+      "narration": "这个函数一开始只是级数，但后来被延拓到更大的复平面区域。",
+      "modality": "hybrid",
+      "formulas": [
+        "\\zeta(s)=\\sum_{n=1}^{\\infty} n^{-s}"
+      ],
+      "estimated_seconds": 24
+    }
+  ]
+}

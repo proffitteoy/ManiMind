@@ -1,0 +1,20 @@
+{
+  "$schema": "https://hyperframes.heygen.com/schema/registry-item.json",
+  "name": "data-chart",
+  "type": "hyperframes:block",
+  "title": "Data Chart",
+  "description": "Animated bar + line chart with staggered reveal, NYT-style typography, and value labels",
+  "tags": ["data", "chart", "statistics"],
+  "dimensions": {
+    "width": 1920,
+    "height": 1080
+  },
+  "duration": 15,
+  "files": [
+    {
+      "path": "data-chart.html",
+      "target": "compositions/data-chart.html",
+      "type": "hyperframes:composition"
+    }
+  ]
+}
