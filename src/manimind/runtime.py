@@ -64,22 +64,37 @@ def load_project_runtime(plan: ProjectPlan) -> ProjectRuntime:
 
 def apply_runtime_snapshot(plan: ProjectPlan, runtime: ProjectRuntime) -> None:
     """把 runtime 快照中的任务状态与阶段回填到内存计划。"""
-    status_by_id: dict[str, TaskStatus] = {}
+    snapshot_by_id: dict[str, dict[str, Any]] = {}
     for item in runtime.execution_tasks:
         if not isinstance(item, dict):
             continue
         task_id = item.get("id")
-        raw_status = item.get("status")
-        if not isinstance(task_id, str) or not isinstance(raw_status, str):
+        if not isinstance(task_id, str):
             continue
-        try:
-            status_by_id[task_id] = TaskStatus(raw_status)
-        except ValueError:
-            continue
+        snapshot_by_id[task_id] = item
 
     for task in plan.execution_tasks:
-        if task.id in status_by_id:
-            task.status = status_by_id[task.id]
+        snapshot = snapshot_by_id.get(task.id)
+        if snapshot is None:
+            continue
+        raw_status = snapshot.get("status")
+        if isinstance(raw_status, str):
+            try:
+                task.status = TaskStatus(raw_status)
+            except ValueError:
+                pass
+        blocked_reason = snapshot.get("blocked_reason")
+        if isinstance(blocked_reason, str) or blocked_reason is None:
+            task.blocked_reason = blocked_reason
+        blocked_at = snapshot.get("blocked_at")
+        if isinstance(blocked_at, str) or blocked_at is None:
+            task.blocked_at = blocked_at
+        last_progress = snapshot.get("last_progress")
+        if isinstance(last_progress, str) or last_progress is None:
+            task.last_progress = last_progress
+        last_progress_at = snapshot.get("last_progress_at")
+        if isinstance(last_progress_at, str) or last_progress_at is None:
+            task.last_progress_at = last_progress_at
 
     stage_value = runtime.state.get("current_stage")
     if isinstance(stage_value, str):
@@ -93,47 +108,58 @@ def apply_runtime_snapshot(plan: ProjectPlan, runtime: ProjectRuntime) -> None:
 
 def derive_current_stage(plan: ProjectPlan) -> PipelineStage:
     """从执行任务状态派生当前阶段。"""
-    status = {task.id: task.status for task in plan.execution_tasks}
+    def _tasks_for_stage(stage: PipelineStage) -> list[Any]:
+        return [task for task in plan.execution_tasks if task.stage == stage]
 
-    if status.get("post_produce.package") == TaskStatus.COMPLETED:
+    def _all_completed(stage: PipelineStage) -> bool:
+        tasks = _tasks_for_stage(stage)
+        return bool(tasks) and all(task.status == TaskStatus.COMPLETED for task in tasks)
+
+    def _any_in_progress(stage: PipelineStage) -> bool:
+        return any(
+            task.status == TaskStatus.IN_PROGRESS for task in _tasks_for_stage(stage)
+        )
+
+    if _all_completed(PipelineStage.PACKAGE):
         return PipelineStage.DONE
 
-    if status.get("post_produce.package") == TaskStatus.IN_PROGRESS:
-        return PipelineStage.POST_PRODUCE
-
-    if status.get("review.outputs") == TaskStatus.COMPLETED:
+    if _any_in_progress(PipelineStage.PACKAGE):
         return PipelineStage.PACKAGE
 
-    if status.get("review.outputs") == TaskStatus.IN_PROGRESS:
+    if _all_completed(PipelineStage.POST_PRODUCE):
+        return PipelineStage.PACKAGE
+
+    if _any_in_progress(PipelineStage.POST_PRODUCE):
+        return PipelineStage.POST_PRODUCE
+
+    if _all_completed(PipelineStage.REVIEW):
+        return PipelineStage.POST_PRODUCE
+
+    if _any_in_progress(PipelineStage.REVIEW):
         return PipelineStage.REVIEW
 
-    render_tasks = [
-        task
-        for task in plan.execution_tasks
-        if task.id.startswith("render.")
-    ]
-    if render_tasks and all(task.status == TaskStatus.COMPLETED for task in render_tasks):
+    if _all_completed(PipelineStage.DISPATCH):
         return PipelineStage.REVIEW
 
-    if any(task.status == TaskStatus.IN_PROGRESS for task in render_tasks):
+    if _any_in_progress(PipelineStage.DISPATCH):
         return PipelineStage.DISPATCH
 
-    if status.get("plan.storyboard") == TaskStatus.COMPLETED:
+    if _all_completed(PipelineStage.PLAN):
         return PipelineStage.DISPATCH
 
-    if status.get("plan.storyboard") == TaskStatus.IN_PROGRESS:
+    if _any_in_progress(PipelineStage.PLAN):
         return PipelineStage.PLAN
 
-    if status.get("summarize.research") == TaskStatus.COMPLETED:
+    if _all_completed(PipelineStage.SUMMARIZE):
         return PipelineStage.PLAN
 
-    if status.get("summarize.research") == TaskStatus.IN_PROGRESS:
+    if _any_in_progress(PipelineStage.SUMMARIZE):
         return PipelineStage.SUMMARIZE
 
-    if status.get("ingest.sources") == TaskStatus.COMPLETED:
+    if _all_completed(PipelineStage.INGEST):
         return PipelineStage.SUMMARIZE
 
-    if status.get("ingest.sources") == TaskStatus.IN_PROGRESS:
+    if _any_in_progress(PipelineStage.INGEST):
         return PipelineStage.INGEST
 
     return PipelineStage.PRESTART

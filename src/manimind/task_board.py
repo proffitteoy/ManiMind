@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import ExecutionTask, ProjectPlan, TaskStatus
+from .models import ExecutionTask, PipelineStage, ProjectPlan, TaskStatus
 
 
 @dataclass(slots=True)
@@ -82,13 +82,29 @@ def update_execution_task_status(
 
     previous = task.status
     task.status = new_status
+    if new_status in {TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED}:
+        task.blocked_reason = None
+        task.blocked_at = None
 
-    review_task = index.get("review.outputs")
+    review_task = next(
+        (
+            item
+            for item in plan.execution_tasks
+            if item.stage == PipelineStage.REVIEW and item.verification_required
+        ),
+        None,
+    )
     pre_review_tasks = [
         item
         for item in plan.execution_tasks
-        if item.id != "review.outputs"
-        and "review.outputs" not in item.blocked_by
+        if item.stage
+        not in {
+            PipelineStage.REVIEW,
+            PipelineStage.POST_PRODUCE,
+            PipelineStage.PACKAGE,
+            PipelineStage.DONE,
+            PipelineStage.BLOCKED,
+        }
     ]
     non_review_done = all(
         item.status == TaskStatus.COMPLETED for item in pre_review_tasks

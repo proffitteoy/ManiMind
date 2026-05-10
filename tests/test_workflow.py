@@ -71,9 +71,19 @@ def test_project_plan_includes_verification_gate_and_agent_profiles() -> None:
         "render.seg-1.manim",
         "render.seg-1.svg",
     ]
-    assert execution_tasks["post_produce.package"].blocked_by == [
+    assert execution_tasks["review.outputs"].blocks == ["post_produce.outputs"]
+    assert execution_tasks["post_produce.outputs"].blocked_by == [
         "review.outputs"
     ]
+    assert execution_tasks["post_produce.outputs"].blocks == ["package.delivery"]
+    assert execution_tasks["package.delivery"].blocked_by == [
+        "post_produce.outputs"
+    ]
+    assert execution_tasks["package.delivery"].required_outputs == [
+        "demo-project.asset.manifest"
+    ]
+    assert execution_tasks["render.seg-1.html"].stage.value == "dispatch"
+    assert execution_tasks["package.delivery"].stage.value == "package"
 
     agent_profiles = {profile.id: profile for profile in plan.agent_profiles}
     assert agent_profiles["planner"].mode == AgentMode.READ_ONLY

@@ -51,6 +51,17 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class EventType(str, Enum):
+    PLAN_SNAPSHOT = "plan_snapshot"
+    DISPATCH_CONTEXT_PACK = "dispatch.context_pack"
+    WORKER_PROGRESS = "worker.progress"
+    WORKER_BLOCKER = "worker.blocker"
+    WORKER_RESULT = "worker.result"
+    REVIEW_DECISION = "review.decision"
+    LEADER_COMMIT = "leader.commit"
+    STAGE_CHANGED = "stage.changed"
+
+
 @dataclass(slots=True)
 class SourceBundle:
     paper_path: str
@@ -145,7 +156,12 @@ class ExecutionTask:
     subject: str
     owner_role: str
     active_form: str
+    stage: PipelineStage
     status: TaskStatus = TaskStatus.PENDING
+    blocked_reason: str | None = None
+    blocked_at: str | None = None
+    last_progress: str | None = None
+    last_progress_at: str | None = None
     blocked_by: list[str] = field(default_factory=list)
     blocks: list[str] = field(default_factory=list)
     required_outputs: list[str] = field(default_factory=list)
@@ -157,7 +173,12 @@ class ExecutionTask:
             "subject": self.subject,
             "owner_role": self.owner_role,
             "active_form": self.active_form,
+            "stage": self.stage.value,
             "status": self.status.value,
+            "blocked_reason": self.blocked_reason,
+            "blocked_at": self.blocked_at,
+            "last_progress": self.last_progress,
+            "last_progress_at": self.last_progress_at,
             "blocked_by": self.blocked_by,
             "blocks": self.blocks,
             "required_outputs": self.required_outputs,

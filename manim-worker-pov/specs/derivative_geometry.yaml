@@ -1,0 +1,42 @@
+scene_id: derivative_geometry
+scene_class: DerivativeGeometryScene
+quality: ql
+
+goal: >
+  Create a Manim animation showing that the derivative is the limiting slope
+  of secant lines as one point approaches another point on a curve.
+
+requirements:
+  - Use Manim Community Edition.
+  - Use from manim import *.
+  - Define exactly one Scene class.
+  - The class name must be DerivativeGeometryScene.
+  - Do not use external images, SVGs, fonts, plugins, or custom LaTeX packages.
+  - Prefer simple and stable Manim APIs.
+  - The scene must be renderable with: manim -ql scene.py DerivativeGeometryScene.
+
+visual_objects:
+  - coordinate axes
+  - graph of y = 0.25 * (x - 1)^2 + 1
+  - fixed point A on the graph at x = 1
+  - moving point B on the graph, moving from x = 3.5 to x = 1.3
+  - secant line through A and B
+  - tangent line at A
+  - short formula for secant slope
+  - short formula for derivative
+
+animation_steps:
+  - create coordinate axes
+  - draw function graph
+  - show point A
+  - show point B
+  - draw secant line through A and B
+  - move B toward A while secant line updates
+  - show tangent line at A
+  - show derivative formula
+
+constraints:
+  max_duration_seconds: 25
+  avoid_complex_latex: true
+  use_dark_background: true
+  keep_text_readable: true

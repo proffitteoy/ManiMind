@@ -24,7 +24,7 @@
       "x": -930,
       "y": -420,
       "width": 410,
-      "height": 660,
+      "height": 940,
       "label": "CLI 与编排入口"
     },
     {
@@ -104,6 +104,16 @@
       "color": "4"
     },
     {
+      "id": "node-frontend-console",
+      "type": "text",
+      "x": -880,
+      "y": 390,
+      "width": 300,
+      "height": 200,
+      "text": "# frontend/manimind-console\n\n- Next.js 控制台骨架\n- dashboard 首页\n- mock 数据到 API 映射\n- 只经 backend API 读写",
+      "color": "4"
+    },
+    {
       "id": "node-models",
       "type": "text",
       "x": -300,
@@ -139,7 +149,7 @@
       "y": -60,
       "width": 340,
       "height": 190,
-      "text": "# context_assembly.py\n\n- `context packet`\n- `write targets`\n- `prompt sections`\n- `section cache`",
+      "text": "# context_assembly.py\n\n- `context packet`\n- `write targets`\n- 静态/动态上下文装配\n- `section cache`",
       "color": "5"
     },
     {
@@ -159,7 +169,7 @@
       "y": 460,
       "width": 340,
       "height": 180,
-      "text": "# runtime_store.py\n\n- `plan snapshot`\n- `context packet`\n- `task update`\n- `events.jsonl`",
+      "text": "# runtime_store.py\n\n- 静态快照写入\n- 动态 `context packet`\n- 动态 `task update`\n- `events.jsonl`",
       "color": "1"
     },
     {
@@ -179,7 +189,7 @@
       "y": -320,
       "width": 360,
       "height": 230,
-      "text": "# Project Runtime\n\n`runtime/projects/<project_id>/`\n\n- `state.json`\n- `context-records.json`\n- `execution-tasks.json`\n- `project-plan.json`\n- `events.jsonl`"
+      "text": "# Project Runtime\n\n`runtime/projects/<project_id>/`\n\n- 静态事实：`context-records.json`\n- 运行状态：`state.json` / `execution-tasks.json`\n- 计划快照：`project-plan.json`\n- 审计：`events.jsonl`"
     },
     {
       "id": "node-session-runtime",
@@ -188,7 +198,7 @@
       "y": -320,
       "width": 360,
       "height": 220,
-      "text": "# Session Runtime\n\n`runtime/sessions/<session_id>/`\n\n- `context-packets/*.json`\n- `task-updates/*.json`\n- `latest snapshots`\n- `events.jsonl`"
+      "text": "# Session Runtime\n\n`runtime/sessions/<session_id>/`\n\n- 协作链路：`context-packets/*.json`\n- 状态推进：`task-updates/*.json`\n- 最近快照：`*-latest.json`\n- 审计：`events.jsonl`"
     },
     {
       "id": "node-outputs",
@@ -276,6 +286,21 @@
       "fromSide": "right",
       "toSide": "left",
       "label": "API payload"
+    },
+    {
+      "id": "edge-docs-frontend",
+      "fromNode": "node-docs",
+      "toNode": "node-frontend-console",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "edge-frontend-backend",
+      "fromNode": "node-frontend-console",
+      "toNode": "node-backend-api",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "label": "REST / SSE"
     },
     {
       "id": "edge-backend-workflow",

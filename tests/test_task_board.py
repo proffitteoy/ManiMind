@@ -86,7 +86,7 @@ def test_verification_nudge_when_non_review_tasks_done() -> None:
 
     result = update_execution_task_status(
         plan=plan,
-        task_id="post_produce.package",
+        task_id="post_produce.outputs",
         new_status=TaskStatus.IN_PROGRESS,
         actor_role="lead",
     )
@@ -102,3 +102,12 @@ def test_verification_nudge_when_non_review_tasks_done() -> None:
     )
     assert review_done.success is True
     assert review_done.verification_nudge_needed is False
+
+    package_before_post = update_execution_task_status(
+        plan=plan,
+        task_id="package.delivery",
+        new_status=TaskStatus.IN_PROGRESS,
+        actor_role="lead",
+    )
+    assert package_before_post.success is False
+    assert package_before_post.reason == "task_blocked"

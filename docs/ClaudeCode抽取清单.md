@@ -12,8 +12,8 @@
 
 落地位置：
 
-- [models.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/models.py)
-- [workflow.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/workflow.py)
+- [models.py](../src/manimind/models.py)
+- [workflow.py](../src/manimind/workflow.py)
 
 抽取结果：
 
@@ -31,8 +31,8 @@
 
 落地位置：
 
-- [context_assembly.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/context_assembly.py)
-- [models.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/models.py)
+- [context_assembly.py](../src/manimind/context_assembly.py)
+- [models.py](../src/manimind/models.py)
 
 抽取结果：
 
@@ -55,9 +55,9 @@
 
 落地位置：
 
-- [models.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/models.py)
-- [workflow.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/workflow.py)
-- [task_board.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/task_board.py)
+- [models.py](../src/manimind/models.py)
+- [workflow.py](../src/manimind/workflow.py)
+- [task_board.py](../src/manimind/task_board.py)
 
 抽取结果：
 
@@ -74,7 +74,7 @@
 
 落地位置：
 
-- [bootstrap.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/bootstrap.py)
+- [bootstrap.py](../src/manimind/bootstrap.py)
 
 抽取结果：
 
@@ -87,7 +87,7 @@
 
 落地位置：
 
-- [main.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/main.py)
+- [main.py](../src/manimind/main.py)
 
 抽取结果：
 
@@ -100,7 +100,7 @@
 
 落地位置：
 
-- [runtime_store.py](/C:/Users/84025/Desktop/ManiMind/src/manimind/runtime_store.py)
+- [runtime_store.py](../src/manimind/runtime_store.py)
 
 抽取结果：
 
@@ -111,10 +111,10 @@
 
 ## 七、测试覆盖（已落地）
 
-- [test_bootstrap.py](/C:/Users/84025/Desktop/ManiMind/tests/test_bootstrap.py)
-- [test_workflow.py](/C:/Users/84025/Desktop/ManiMind/tests/test_workflow.py)
-- [test_context_assembly.py](/C:/Users/84025/Desktop/ManiMind/tests/test_context_assembly.py)
-- [test_task_board.py](/C:/Users/84025/Desktop/ManiMind/tests/test_task_board.py)
+- [test_bootstrap.py](../tests/test_bootstrap.py)
+- [test_workflow.py](../tests/test_workflow.py)
+- [test_context_assembly.py](../tests/test_context_assembly.py)
+- [test_task_board.py](../tests/test_task_board.py)
 
 说明：
 

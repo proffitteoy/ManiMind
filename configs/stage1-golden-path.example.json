@@ -1,0 +1,40 @@
+{
+  "project_id": "stage1-golden-path",
+  "title": "阶段1 最小验收链路",
+  "source_bundle": {
+    "paper_path": "inputs/papers/sample-calculus-note.pdf",
+    "note_paths": [
+      "inputs/notes/stage1-outline.md"
+    ],
+    "audience": "高中及本科低年级观众",
+    "style_refs": [
+      "先直觉后公式",
+      "镜头粒度尽量简单"
+    ]
+  },
+  "segments": [
+    {
+      "id": "seg-html",
+      "title": "问题引入",
+      "goal": "验证 HTML worker 的最小派发链路",
+      "narration": "先用直觉问题把观众拉进来，不急着上公式。",
+      "modality": "html",
+      "html_motion_notes": [
+        "只用一层信息卡片",
+        "避免复杂时间线"
+      ],
+      "estimated_seconds": 12
+    },
+    {
+      "id": "seg-manim",
+      "title": "导数的切线直觉",
+      "goal": "验证 Manim worker 的最小派发链路",
+      "narration": "通过割线趋近切线，建立导数是局部变化率的直觉。",
+      "modality": "manim",
+      "formulas": [
+        "f'(x)=\\lim_{h \\to 0} \\frac{f(x+h)-f(x)}{h}"
+      ],
+      "estimated_seconds": 18
+    }
+  ]
+}

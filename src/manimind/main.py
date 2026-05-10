@@ -6,15 +6,23 @@ import argparse
 import json
 from pathlib import Path
 
-from .bootstrap import check_tools, ensure_workspace
+from .bootstrap import check_tools, ensure_workspace, sanitize_identifier
 from .context_assembly import (
     PromptSectionCache,
     build_context_packet,
     build_default_prompt_sections,
 )
-from .models import PipelineStage, SegmentModality, SegmentSpec, SourceBundle, TaskStatus
+from .models import (
+    EventType,
+    PipelineStage,
+    SegmentModality,
+    SegmentSpec,
+    SourceBundle,
+    TaskStatus,
+)
 from .runtime_store import (
     load_execution_task_snapshot,
+    persist_agent_message,
     persist_context_packet,
     persist_plan_snapshot,
     persist_task_update,
@@ -129,6 +137,32 @@ def main() -> None:
         help="任务更新对应的会话标识",
     )
 
+    message_parser = subparsers.add_parser(
+        "agent-message", help="写入 worker/reviewer 结构化消息事件"
+    )
+    message_parser.add_argument("manifest", type=Path)
+    message_parser.add_argument("event_type", type=str)
+    message_parser.add_argument("role_id", type=str)
+    message_parser.add_argument("stage", type=str)
+    message_parser.add_argument(
+        "--task-id",
+        type=str,
+        default=None,
+        help="可选：关联的执行任务 ID",
+    )
+    message_parser.add_argument(
+        "--payload",
+        type=str,
+        default="{}",
+        help="JSON 字符串，写入事件 payload",
+    )
+    message_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="消息写入对应的会话标识",
+    )
+
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -214,6 +248,59 @@ def main() -> None:
                     "mutation": mutation,
                     "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
                     "persisted_paths": persisted,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "agent-message":
+        plan = _build_plan_model_from_manifest(args.manifest)
+        load_execution_task_snapshot(plan)
+        try:
+            event_type = EventType(args.event_type)
+        except ValueError as exc:
+            raise SystemExit(f"unsupported_event_type: {args.event_type}") from exc
+        try:
+            stage = PipelineStage(args.stage)
+        except ValueError as exc:
+            raise SystemExit(f"unsupported_stage: {args.stage}") from exc
+        try:
+            payload = json.loads(args.payload)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid_payload_json: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise SystemExit("invalid_payload_json: payload must be JSON object")
+        persist_agent_message(
+            plan=plan,
+            session_id=args.session_id,
+            event_type=event_type,
+            role_id=args.role_id,
+            stage=stage,
+            payload=payload,
+            task_id=args.task_id,
+        )
+        safe_session_id = sanitize_identifier(args.session_id)
+        print(
+            json.dumps(
+                {
+                    "event_type": event_type.value,
+                    "role_id": args.role_id,
+                    "stage": stage.value,
+                    "task_id": args.task_id,
+                    "payload": payload,
+                    "persisted_paths": {
+                        "project_events": str(
+                            Path(plan.runtime_layout.project_context_dir)
+                            / "events.jsonl"
+                        ),
+                        "session_events": str(
+                            Path(plan.runtime_layout.session_context_root)
+                            / safe_session_id
+                            / "events.jsonl"
+                        ),
+                    },
                 },
                 ensure_ascii=False,
                 indent=2,

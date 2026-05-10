@@ -60,7 +60,13 @@ def build_context_blueprint(project_id: str) -> list[ContextRecord]:
             scope=ContextScope.LONG_TERM,
             summary="公式目录与解释",
             writer_role="lead",
-            consumer_roles=["coordinator", "manim_worker", "reviewer"],
+            consumer_roles=[
+                "coordinator",
+                "html_worker",
+                "manim_worker",
+                "svg_worker",
+                "reviewer",
+            ],
             lifecycle="project",
             invalidation_rule="new_ingest_round",
             sticky=True,
@@ -356,6 +362,7 @@ def build_execution_tasks(
             subject="归档论文、笔记和风格输入",
             owner_role="lead",
             active_form="正在归档输入",
+            stage=PipelineStage.INGEST,
             blocks=["summarize.research"],
             required_outputs=[f"{project_id}.session.handoff"],
         ),
@@ -364,6 +371,7 @@ def build_execution_tasks(
             subject="生成研究总结、术语表和公式目录",
             owner_role="lead",
             active_form="正在总结研究素材",
+            stage=PipelineStage.SUMMARIZE,
             blocked_by=["ingest.sources"],
             blocks=["plan.storyboard"],
             required_outputs=[
@@ -377,6 +385,7 @@ def build_execution_tasks(
             subject="生成讲解脚本、分镜和任务分发表",
             owner_role="coordinator",
             active_form="正在规划分镜与任务",
+            stage=PipelineStage.PLAN,
             blocked_by=["summarize.research"],
             blocks=segment_task_ids or ["review.outputs"],
             required_outputs=[
@@ -393,6 +402,7 @@ def build_execution_tasks(
                 subject=task.objective,
                 owner_role=f"{task.worker.value}_worker",
                 active_form=f"正在产出 {task.worker.value} 片段",
+                stage=PipelineStage.DISPATCH,
                 blocked_by=["plan.storyboard"],
                 blocks=["review.outputs"],
                 required_outputs=task.long_term_outputs + task.short_term_outputs,
@@ -405,19 +415,32 @@ def build_execution_tasks(
             subject="审核结构化产物并给出放行或阻塞结论",
             owner_role="reviewer",
             active_form="正在审核产物证据",
+            stage=PipelineStage.REVIEW,
             blocked_by=review_blocked_by,
-            blocks=["post_produce.package"],
+            blocks=["post_produce.outputs"],
             required_outputs=[f"{project_id}.review.report"],
             verification_required=True,
         )
     )
     tasks.append(
         ExecutionTask(
-            id="post_produce.package",
-            subject="仅在审核通过后执行后处理与交付打包",
+            id="post_produce.outputs",
+            subject="仅在审核通过后执行后处理产物汇总",
             owner_role="lead",
-            active_form="正在打包交付产物",
+            active_form="正在执行后处理汇总",
+            stage=PipelineStage.POST_PRODUCE,
             blocked_by=["review.outputs"],
+            blocks=["package.delivery"],
+        )
+    )
+    tasks.append(
+        ExecutionTask(
+            id="package.delivery",
+            subject="封装交付清单并完成最终打包",
+            owner_role="lead",
+            active_form="正在封装交付包",
+            stage=PipelineStage.PACKAGE,
+            blocked_by=["post_produce.outputs"],
             required_outputs=[f"{project_id}.asset.manifest"],
         )
     )

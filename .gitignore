@@ -10,6 +10,8 @@ env/
 
 # Node / frontend
 node_modules/
+.next/
+*.tsbuildinfo
 dist/
 build/
 

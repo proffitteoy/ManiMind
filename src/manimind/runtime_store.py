@@ -10,7 +10,7 @@ from uuid import uuid4
 from typing import Any
 
 from .bootstrap import sanitize_identifier
-from .models import ProjectPlan
+from .models import EventType, PipelineStage, ProjectPlan
 from .runtime import apply_runtime_snapshot, derive_current_stage, load_project_runtime
 
 
@@ -37,6 +37,52 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _build_event(
+    event_type: EventType,
+    project_id: str,
+    session_id: str,
+    **payload: Any,
+) -> dict[str, Any]:
+    return {
+        "event": event_type.value,
+        "project_id": project_id,
+        "session_id": session_id,
+        "timestamp": _utc_now(),
+        **payload,
+    }
+
+
+def _append_runtime_event(
+    project_dir: Path,
+    session_dir: Path,
+    payload: dict[str, Any],
+) -> None:
+    _append_jsonl(project_dir / "events.jsonl", payload)
+    _append_jsonl(session_dir / "events.jsonl", payload)
+
+
+def _write_project_task_snapshot(project_dir: Path, plan: ProjectPlan) -> None:
+    _write_json(
+        project_dir / "execution-tasks.json",
+        {
+            "project_id": plan.project_id,
+            "updated_at": _utc_now(),
+            "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
+        },
+    )
+
+
+def _write_project_plan_snapshot(project_dir: Path, plan: ProjectPlan) -> None:
+    _write_json(
+        project_dir / "project-plan.json",
+        {
+            "project_id": plan.project_id,
+            "plan": plan.to_dict(),
+            "updated_at": _utc_now(),
+        },
+    )
 
 
 def ensure_runtime_targets(plan: ProjectPlan, session_id: str) -> dict[str, Path]:
@@ -94,21 +140,19 @@ def persist_plan_snapshot(
     _write_json(task_path, task_payload)
     _write_json(plan_path, plan_payload)
 
-    event = {
-        "event": "plan_snapshot",
-        "project_id": plan.project_id,
-        "session_id": session_dir.name,
-        "source_manifest": source_manifest,
-        "timestamp": _utc_now(),
-        "paths": {
+    event = _build_event(
+        EventType.PLAN_SNAPSHOT,
+        plan.project_id,
+        session_dir.name,
+        source_manifest=source_manifest,
+        paths={
             "state": str(state_path),
             "context_records": str(context_path),
             "execution_tasks": str(task_path),
             "project_plan": str(plan_path),
         },
-    }
-    _append_jsonl(project_dir / "events.jsonl", event)
-    _append_jsonl(session_dir / "events.jsonl", event)
+    )
+    _append_runtime_event(project_dir, session_dir, event)
     return {
         "state": str(state_path),
         "context_records": str(context_path),
@@ -137,6 +181,12 @@ def persist_context_packet(
         "project_id": plan.project_id,
         "session_id": session_dir.name,
         "timestamp": _utc_now(),
+        "message_type": EventType.DISPATCH_CONTEXT_PACK.value,
+        "from_role": role_id,
+        "stage": stage,
+        "source_context_keys": [
+            item["key"] for item in packet["context_specs"]  # type: ignore[index]
+        ],
         "context_packet": packet,
     }
     if prompt_sections is not None:
@@ -147,17 +197,15 @@ def persist_context_packet(
     _write_json(packet_path, packet_payload)
     _write_json(latest_path, packet_payload)
 
-    event = {
-        "event": "context_pack",
-        "project_id": plan.project_id,
-        "session_id": session_dir.name,
-        "role_id": role_id,
-        "stage": stage,
-        "timestamp": _utc_now(),
-        "path": str(packet_path),
-    }
-    _append_jsonl(project_dir / "events.jsonl", event)
-    _append_jsonl(session_dir / "events.jsonl", event)
+    event = _build_event(
+        EventType.DISPATCH_CONTEXT_PACK,
+        plan.project_id,
+        session_dir.name,
+        role_id=role_id,
+        stage=stage,
+        path=str(packet_path),
+    )
+    _append_runtime_event(project_dir, session_dir, event)
     return {
         "context_packet": str(packet_path),
         "context_packet_latest": str(latest_path),
@@ -182,6 +230,7 @@ def persist_task_update(
         "project_id": plan.project_id,
         "session_id": session_dir.name,
         "timestamp": _utc_now(),
+        "message_type": EventType.LEADER_COMMIT.value,
         "mutation": mutation,
         "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
     }
@@ -192,24 +241,20 @@ def persist_task_update(
     state_path = project_dir / "state.json"
     project_plan_path = project_dir / "project-plan.json"
 
-    plan.current_stage = derive_current_stage(plan)
-
     previous_state_payload: dict[str, Any] = {}
     if state_path.exists():
         previous_state_payload = json.loads(state_path.read_text(encoding="utf-8"))
         if not isinstance(previous_state_payload, dict):
             previous_state_payload = {}
+    previous_stage = previous_state_payload.get("current_stage")
+    if not isinstance(previous_stage, str):
+        previous_stage = plan.current_stage.value
+
+    plan.current_stage = derive_current_stage(plan)
 
     _write_json(update_path, update_payload)
     _write_json(latest_path, update_payload)
-    _write_json(
-        project_task_path,
-        {
-            "project_id": plan.project_id,
-            "updated_at": _utc_now(),
-            "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
-        },
-    )
+    _write_project_task_snapshot(project_dir, plan)
     _write_json(
         state_path,
         {
@@ -220,27 +265,30 @@ def persist_task_update(
             "updated_at": _utc_now(),
         },
     )
-    _write_json(
-        project_plan_path,
-        {
-            "project_id": plan.project_id,
-            "plan": plan.to_dict(),
-            "updated_at": _utc_now(),
-        },
-    )
+    _write_project_plan_snapshot(project_dir, plan)
 
-    event = {
-        "event": "task_update",
-        "project_id": plan.project_id,
-        "session_id": session_dir.name,
-        "task_id": task_id,
-        "to_status": mutation.get("to_status"),
-        "success": mutation.get("success"),
-        "timestamp": _utc_now(),
-        "path": str(update_path),
-    }
-    _append_jsonl(project_dir / "events.jsonl", event)
-    _append_jsonl(session_dir / "events.jsonl", event)
+    event = _build_event(
+        EventType.LEADER_COMMIT,
+        plan.project_id,
+        session_dir.name,
+        action="task_update",
+        task_id=task_id,
+        to_status=mutation.get("to_status"),
+        success=mutation.get("success"),
+        path=str(update_path),
+    )
+    _append_runtime_event(project_dir, session_dir, event)
+
+    if previous_stage != plan.current_stage.value:
+        stage_event = _build_event(
+            EventType.STAGE_CHANGED,
+            plan.project_id,
+            session_dir.name,
+            from_stage=previous_stage,
+            to_stage=plan.current_stage.value,
+            cause_task_id=task_id,
+        )
+        _append_runtime_event(project_dir, session_dir, stage_event)
     return {
         "task_update": str(update_path),
         "task_update_latest": str(latest_path),
@@ -248,6 +296,124 @@ def persist_task_update(
         "state": str(state_path),
         "project_plan": str(project_plan_path),
     }
+
+
+def persist_agent_message(
+    plan: ProjectPlan,
+    session_id: str,
+    event_type: EventType,
+    role_id: str,
+    stage: PipelineStage | str,
+    payload: dict[str, Any] | None = None,
+    task_id: str | None = None,
+) -> None:
+    """追加 worker/reviewer 侧结构化消息到项目级与会话级事件流。"""
+    allowed_event_types = {
+        EventType.WORKER_PROGRESS,
+        EventType.WORKER_BLOCKER,
+        EventType.WORKER_RESULT,
+        EventType.REVIEW_DECISION,
+    }
+    if event_type not in allowed_event_types:
+        raise ValueError(f"unsupported_agent_message_type: {event_type.value}")
+
+    targets = ensure_runtime_targets(plan, session_id)
+    project_dir = targets["project_dir"]
+    session_dir = targets["session_dir"]
+    stage_value = stage.value if isinstance(stage, PipelineStage) else stage
+    event_payload_data = payload or {}
+    event_payload = _build_event(
+        event_type,
+        plan.project_id,
+        session_dir.name,
+        role_id=role_id,
+        stage=stage_value,
+        task_id=task_id,
+        payload=event_payload_data,
+    )
+    _append_runtime_event(project_dir, session_dir, event_payload)
+
+    task = None
+    if task_id:
+        task = next((item for item in plan.execution_tasks if item.id == task_id), None)
+
+    should_persist_tasks = False
+    if task is not None:
+        now = _utc_now()
+        if event_type == EventType.WORKER_PROGRESS:
+            progress_label = event_payload_data.get("progress_label")
+            if not isinstance(progress_label, str) or not progress_label.strip():
+                progress_label = event_payload_data.get("message")
+            if not isinstance(progress_label, str) or not progress_label.strip():
+                progress_label = EventType.WORKER_PROGRESS.value
+            task.last_progress = progress_label
+            task.last_progress_at = now
+            should_persist_tasks = True
+        elif event_type == EventType.WORKER_BLOCKER:
+            blocked_reason = event_payload_data.get("blocked_reason")
+            if not isinstance(blocked_reason, str) or not blocked_reason.strip():
+                blocked_reason = event_payload_data.get("reason")
+            if not isinstance(blocked_reason, str) or not blocked_reason.strip():
+                blocked_reason = "worker_blocker"
+            task.blocked_reason = blocked_reason
+            task.blocked_at = now
+            should_persist_tasks = True
+        elif event_type == EventType.WORKER_RESULT:
+            task.blocked_reason = None
+            task.blocked_at = None
+            result_summary = event_payload_data.get("summary")
+            if isinstance(result_summary, str) and result_summary.strip():
+                task.last_progress = result_summary
+                task.last_progress_at = now
+            should_persist_tasks = True
+
+    previous_stage = plan.current_stage
+    stage_overridden = False
+    if event_type == EventType.WORKER_BLOCKER:
+        plan.current_stage = PipelineStage.BLOCKED
+        stage_overridden = True
+    elif event_type == EventType.REVIEW_DECISION:
+        decision = event_payload_data.get("decision")
+        if isinstance(decision, str):
+            normalized = decision.strip().lower()
+            if normalized in {"blocked", "reject", "rejected"}:
+                plan.current_stage = PipelineStage.BLOCKED
+                stage_overridden = True
+
+    if should_persist_tasks:
+        _write_project_task_snapshot(project_dir, plan)
+        _write_project_plan_snapshot(project_dir, plan)
+
+    if stage_overridden:
+        state_path = project_dir / "state.json"
+        state_payload: dict[str, Any] = {}
+        if state_path.exists():
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                state_payload = loaded
+        _write_json(
+            state_path,
+            {
+                "project_id": plan.project_id,
+                "current_stage": plan.current_stage.value,
+                "stages": [item.value for item in plan.stages],
+                "source_manifest": state_payload.get("source_manifest"),
+                "updated_at": _utc_now(),
+            },
+        )
+        _write_project_plan_snapshot(project_dir, plan)
+
+    if previous_stage != plan.current_stage:
+        stage_changed_event = _build_event(
+            EventType.STAGE_CHANGED,
+            plan.project_id,
+            session_dir.name,
+            from_stage=previous_stage.value,
+            to_stage=plan.current_stage.value,
+            cause_event=event_type.value,
+            cause_task_id=task_id,
+        )
+        _append_runtime_event(project_dir, session_dir, stage_changed_event)
 
 
 def load_execution_task_snapshot(plan: ProjectPlan) -> bool:

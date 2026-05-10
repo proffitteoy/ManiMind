@@ -9,6 +9,7 @@ from .context_assembly import (
 )
 from .models import (
     AgentProfile,
+    EventType,
     ExecutionTask,
     PipelineStage,
     ProjectPlan,
@@ -25,6 +26,7 @@ from .runtime import (
 )
 from .runtime_store import (
     load_execution_task_snapshot,
+    persist_agent_message,
     persist_context_packet,
     persist_plan_snapshot,
     persist_task_update,
@@ -34,6 +36,7 @@ from .workflow import build_project_plan
 
 __all__ = [
     "AgentProfile",
+    "EventType",
     "ExecutionTask",
     "PipelineStage",
     "ProjectRuntime",
@@ -53,6 +56,7 @@ __all__ = [
     "list_available_tasks",
     "load_project_runtime",
     "load_execution_task_snapshot",
+    "persist_agent_message",
     "persist_context_packet",
     "persist_plan_snapshot",
     "persist_task_update",

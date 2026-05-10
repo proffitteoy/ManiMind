@@ -5,10 +5,19 @@ from pathlib import Path
 
 from manimind.bootstrap import build_runtime_layout
 from manimind.context_assembly import build_context_packet
-from manimind.models import PipelineStage, RuntimeLayout, SegmentModality, SegmentSpec, SourceBundle, TaskStatus
+from manimind.models import (
+    EventType,
+    PipelineStage,
+    RuntimeLayout,
+    SegmentModality,
+    SegmentSpec,
+    SourceBundle,
+    TaskStatus,
+)
 from manimind.runtime import derive_current_stage, load_project_runtime
 from manimind.runtime_store import (
     load_execution_task_snapshot,
+    persist_agent_message,
     persist_context_packet,
     persist_plan_snapshot,
     persist_task_update,
@@ -100,8 +109,9 @@ def test_context_and_task_logs_are_persisted(tmp_path) -> None:
     project_events = (
         Path(plan.runtime_layout.project_context_dir) / "events.jsonl"
     ).read_text(encoding="utf-8")
-    assert '"event": "context_pack"' in project_events
-    assert '"event": "task_update"' in project_events
+    assert f'"event": "{EventType.DISPATCH_CONTEXT_PACK.value}"' in project_events
+    assert f'"event": "{EventType.LEADER_COMMIT.value}"' in project_events
+    assert f'"event": "{EventType.STAGE_CHANGED.value}"' in project_events
 
 
 def test_load_execution_task_snapshot_restores_status(tmp_path) -> None:
@@ -172,3 +182,75 @@ def test_derive_current_stage_from_task_statuses(tmp_path) -> None:
 
     task_by_id["plan.storyboard"].status = TaskStatus.COMPLETED
     assert derive_current_stage(plan) == PipelineStage.DISPATCH
+
+    for task_id in ["render.seg-1.html", "render.seg-1.manim", "render.seg-1.svg"]:
+        task_by_id[task_id].status = TaskStatus.COMPLETED
+    assert derive_current_stage(plan) == PipelineStage.REVIEW
+
+    task_by_id["review.outputs"].status = TaskStatus.COMPLETED
+    assert derive_current_stage(plan) == PipelineStage.POST_PRODUCE
+
+    task_by_id["post_produce.outputs"].status = TaskStatus.COMPLETED
+    assert derive_current_stage(plan) == PipelineStage.PACKAGE
+
+    task_by_id["package.delivery"].status = TaskStatus.COMPLETED
+    assert derive_current_stage(plan) == PipelineStage.DONE
+
+
+def test_persist_agent_message_uses_structured_event_types(tmp_path) -> None:
+    plan = _demo_plan(tmp_path)
+    persist_plan_snapshot(
+        plan=plan,
+        session_id="session-1",
+        source_manifest="demo.json",
+    )
+
+    persist_agent_message(
+        plan=plan,
+        session_id="session-1",
+        event_type=EventType.WORKER_BLOCKER,
+        role_id="manim_worker",
+        stage=PipelineStage.DISPATCH,
+        task_id="render.seg-1.manim",
+        payload={"blocked_reason": "missing_formula_input"},
+    )
+
+    project_events = (
+        Path(plan.runtime_layout.project_context_dir) / "events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert f'"event": "{EventType.WORKER_BLOCKER.value}"' in project_events
+    assert f'"event": "{EventType.STAGE_CHANGED.value}"' in project_events
+    assert '"task_id": "render.seg-1.manim"' in project_events
+    assert '"blocked_reason": "missing_formula_input"' in project_events
+
+    runtime = load_project_runtime(plan)
+    blocked_task = next(
+        item for item in runtime.execution_tasks if item["id"] == "render.seg-1.manim"
+    )
+    assert blocked_task["blocked_reason"] == "missing_formula_input"
+    assert blocked_task["blocked_at"] is not None
+    assert runtime.state["current_stage"] == "blocked"
+
+
+def test_worker_progress_updates_runtime_query_fields(tmp_path) -> None:
+    plan = _demo_plan(tmp_path)
+    persist_plan_snapshot(
+        plan=plan,
+        session_id="session-1",
+        source_manifest="demo.json",
+    )
+
+    persist_agent_message(
+        plan=plan,
+        session_id="session-1",
+        event_type=EventType.WORKER_PROGRESS,
+        role_id="html_worker",
+        stage=PipelineStage.DISPATCH,
+        task_id="render.seg-1.html",
+        payload={"progress_label": "first_render_pass"},
+    )
+
+    runtime = load_project_runtime(plan)
+    task = next(item for item in runtime.execution_tasks if item["id"] == "render.seg-1.html")
+    assert task["last_progress"] == "first_render_pass"
+    assert task["last_progress_at"] is not None

@@ -20,9 +20,11 @@ ManiMind/
 ├─ AGENTS.md
 ├─ README.md
 ├─ docs/
+├─ frontend/
 ├─ configs/
 ├─ scripts/
 ├─ src/manimind/
+├─ manim-worker-pov/
 ├─ tests/
 ├─ resources/
 │  ├─ skills/html-animation/
@@ -46,6 +48,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\init-workspace.ps1
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\sync-thirdparty-assets.ps1
 ```
+
+注意：
+
+- 该脚本会先清空 `resources/skills/html-animation/` 与 `resources/references/hyperframes/` 后再复制白名单内容。
+- 当前仓库已经带有这两份资源；若未确认上游源码路径存在，不要直接重跑。
+- 需要刷新资源时，优先显式传入上游路径。
 
 源仓库不在项目根目录时，可显式传路径：
 
@@ -74,6 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 - `context-pack <manifest.json> <role_id> <stage>`：生成角色上下文包。
 - `context-pack ... --render-prompt-sections`：额外输出提示词分段渲染结果。
 - `task-update <manifest.json> <task_id> <status> <actor_role>`：按状态机推进任务。
+- `agent-message <manifest.json> <event_type> <role_id> <stage> --payload '{...}'`：写入 `worker.progress / worker.blocker / worker.result / review.decision` 结构化消息。
 - `context-pack` 默认会阻断角色非法阶段请求；需要显式放行时使用 `--allow-disallowed-stage`。
 - 三个命令支持 `--session-id`，并会把状态与事件日志落盘到 `runtime/projects/<project_id>/` 与 `runtime/sessions/<session_id>/`。
 
@@ -85,6 +94,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
   - `POST /api/projects/tasks`
   - `POST /api/projects/tasks/update`
   - `POST /api/projects/context-pack`
+  - `POST /api/projects/events/message`
 - 启动示例（安装 `api` 依赖后）：
 
 ```powershell
@@ -92,10 +102,32 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 & 'C:\Users\84025\AppData\Local\Programs\Python\Python312\python.exe' -m uvicorn backend.main:app --reload
 ```
 
+## 前端控制台骨架（新增）
+
+- 新增目录：`frontend/manimind-console/`
+- 技术栈：`Next.js 16 + React 19 + Tailwind CSS 4`
+- 当前作用：先验证控制台首页的信息结构、模块边界和后续 API 接线点
+- 当前数据：静态 mock 数据，后续替换为 `backend/` 的项目、任务、上下文和事件接口
+
+启动示例：
+
+```powershell
+cd F:\ManiMind\frontend\manimind-console
+npm install
+npm run dev
+```
+
 ## 文档入口
 
-- [docs/README.md](/C:/Users/84025/Desktop/ManiMind/docs/README.md)
-- [docs/通用项目架构模板.md](/C:/Users/84025/Desktop/ManiMind/docs/通用项目架构模板.md)
-- [docs/上下文与状态设计.md](/C:/Users/84025/Desktop/ManiMind/docs/上下文与状态设计.md)
-- [docs/第三方整合.md](/C:/Users/84025/Desktop/ManiMind/docs/第三方整合.md)
-- [docs/ClaudeCode抽取清单.md](/C:/Users/84025/Desktop/ManiMind/docs/ClaudeCode抽取清单.md)
+- [docs/README.md](./docs/README.md)
+- [docs/前端控制台骨架方案.md](./docs/前端控制台骨架方案.md)
+- [docs/阶段1计划.md](./docs/阶段1计划.md)
+- [docs/通用项目架构模板.md](./docs/通用项目架构模板.md)
+- [docs/上下文与状态设计.md](./docs/上下文与状态设计.md)
+- [docs/第三方整合.md](./docs/第三方整合.md)
+- [docs/ClaudeCode抽取清单.md](./docs/ClaudeCode抽取清单.md)
+
+## 独立 POV（新增）
+
+- `manim-worker-pov/`：Manim Worker 最小验证闭环（固定 spec -> 代码生成 -> 渲染 -> 日志修复）。
+- 当前定位是独立 POC，用于验证 worker 侧协议与渲染修复，不视为 `src/manimind/` 已接入的正式执行器。

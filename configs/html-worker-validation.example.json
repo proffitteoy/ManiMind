@@ -1,0 +1,29 @@
+{
+  "project_id": "html-worker-validation",
+  "title": "HTML Worker 最小验证",
+  "source_bundle": {
+    "paper_path": "inputs/papers/html-worker-validation.pdf",
+    "note_paths": [
+      "inputs/notes/html-worker-validation.md"
+    ],
+    "audience": "科普视频观众",
+    "style_refs": [
+      "优先复用现有 HTML 模板与开源组件",
+      "保持审阅友好的最小验证范围"
+    ]
+  },
+  "segments": [
+    {
+      "id": "seg-html-01",
+      "title": "HTML 片段验证",
+      "goal": "验证 html_worker 的编排契约、上下文装配与落盘路径",
+      "narration": "该片段仅用于验证 HTML worker 的派发、上下文与审核前状态推进。",
+      "modality": "html",
+      "html_motion_notes": [
+        "优先参考 html-animation 模板",
+        "必要时引用 HyperFrames 规则作为实现约束"
+      ],
+      "estimated_seconds": 12
+    }
+  ]
+}
