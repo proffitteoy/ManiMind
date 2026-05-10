@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from .models import ExecutionTask, PipelineStage, ProjectPlan, TaskStatus
 
@@ -49,6 +50,7 @@ def update_execution_task_status(
     task_id: str,
     new_status: TaskStatus,
     actor_role: str,
+    output_checker: Callable[[str], bool] | None = None,
 ) -> TaskMutationResult:
     """按依赖规则更新任务状态。"""
     index = _task_index(plan)
@@ -71,6 +73,16 @@ def update_execution_task_status(
             reason="owner_mismatch",
         )
 
+    if task.id == "review.outputs" and new_status == TaskStatus.COMPLETED:
+        if actor_role not in {"human_reviewer", "lead"}:
+            return TaskMutationResult(
+                success=False,
+                task_id=task_id,
+                from_status=task.status.value,
+                to_status=new_status.value,
+                reason="human_confirmation_required",
+            )
+
     if new_status in {TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED} and not _is_unblocked(task, index):
         return TaskMutationResult(
             success=False,
@@ -79,6 +91,19 @@ def update_execution_task_status(
             to_status=new_status.value,
             reason="task_blocked",
         )
+
+    if new_status == TaskStatus.COMPLETED and output_checker is not None:
+        missing_outputs = [
+            output_key for output_key in task.required_outputs if not output_checker(output_key)
+        ]
+        if missing_outputs:
+            return TaskMutationResult(
+                success=False,
+                task_id=task_id,
+                from_status=task.status.value,
+                to_status=new_status.value,
+                reason=f"missing_required_outputs:{','.join(missing_outputs)}",
+            )
 
     previous = task.status
     task.status = new_status

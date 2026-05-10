@@ -65,7 +65,12 @@ def test_project_plan_includes_verification_gate_and_agent_profiles() -> None:
     )
 
     execution_tasks = {task.id: task for task in plan.execution_tasks}
+    assert execution_tasks["explore.references"].owner_role == "explorer"
+    assert execution_tasks["plan.research_brief"].owner_role == "planner"
+    assert execution_tasks["summarize.research"].blocked_by == ["explore.references"]
+    assert execution_tasks["plan.storyboard"].blocked_by == ["plan.research_brief"]
     assert execution_tasks["review.outputs"].verification_required is True
+    assert execution_tasks["review.outputs"].owner_role == "human_reviewer"
     assert execution_tasks["review.outputs"].blocked_by == [
         "render.seg-1.html",
         "render.seg-1.manim",
@@ -88,6 +93,7 @@ def test_project_plan_includes_verification_gate_and_agent_profiles() -> None:
     agent_profiles = {profile.id: profile for profile in plan.agent_profiles}
     assert agent_profiles["planner"].mode == AgentMode.READ_ONLY
     assert agent_profiles["reviewer"].mode == AgentMode.VERIFY_ONLY
+    assert agent_profiles["human_reviewer"].mode == AgentMode.VERIFY_ONLY
     assert (
         plan.runtime_layout.project_context_dir.endswith(
             "runtime\\projects\\demo-project"

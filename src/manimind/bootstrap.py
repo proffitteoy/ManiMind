@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 from shutil import which
@@ -101,10 +102,64 @@ def check_reference_archives(root: Path | None = None) -> dict[str, bool]:
 
 def check_tools() -> dict[str, bool]:
     """检查关键工具是否可用。"""
+    def _path_exists(raw_path: str | None) -> bool:
+        if not raw_path:
+            return False
+        return Path(raw_path).expanduser().exists()
+
+    def _tool_available(name: str, *, env_var: str, extra_candidates: list[str]) -> bool:
+        if which(name) is not None:
+            return True
+        if _path_exists(os.environ.get(env_var)):
+            return True
+        for candidate in extra_candidates:
+            if _path_exists(candidate):
+                return True
+        return False
+
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    user_profile = os.environ.get("USERPROFILE", "")
+    python_root = Path(local_app_data) / "Programs" / "Python" / "Python312"
+    manim_path = python_root / "Scripts" / "manim.exe"
+    python_path = python_root / "python.exe"
+    windows_apps_python = Path(local_app_data) / "Microsoft" / "WindowsApps" / "python.exe"
+    user_python_scripts = Path(user_profile) / "AppData" / "Local" / "Programs" / "Python" / "Python312" / "Scripts" / "manim.exe"
+
+    python_ok = _tool_available(
+        "python",
+        env_var="MANIMIND_PYTHON_PATH",
+        extra_candidates=[
+            str(python_path),
+            str(windows_apps_python),
+        ],
+    ) or which("py") is not None
+
     return {
-        "node": which("node") is not None,
-        "python": which("python") is not None,
-        "bun": which("bun") is not None,
-        "ffmpeg": which("ffmpeg") is not None,
-        "manim": which("manim") is not None,
+        "node": _tool_available(
+            "node",
+            env_var="MANIMIND_NODE_PATH",
+            extra_candidates=[],
+        ),
+        "python": python_ok,
+        "bun": _tool_available(
+            "bun",
+            env_var="MANIMIND_BUN_PATH",
+            extra_candidates=[],
+        ),
+        "ffmpeg": _tool_available(
+            "ffmpeg",
+            env_var="MANIMIND_FFMPEG_PATH",
+            extra_candidates=[
+                r"D:\ffmpeg\bin\ffmpeg.exe",
+                str(Path(user_profile) / "scoop" / "apps" / "ffmpeg" / "current" / "bin" / "ffmpeg.exe"),
+            ],
+        ),
+        "manim": _tool_available(
+            "manim",
+            env_var="MANIMIND_MANIM_PATH",
+            extra_candidates=[
+                str(manim_path),
+                str(user_python_scripts),
+            ],
+        ),
     }

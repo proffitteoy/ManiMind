@@ -83,6 +83,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 - `context-pack ... --render-prompt-sections`：额外输出提示词分段渲染结果。
 - `task-update <manifest.json> <task_id> <status> <actor_role>`：按状态机推进任务。
 - `agent-message <manifest.json> <event_type> <role_id> <stage> --payload '{...}'`：写入 `worker.progress / worker.blocker / worker.result / review.decision` 结构化消息。
+- `run-to-review <manifest.json>`：执行 ingest/summarize/plan/dispatch，并推进到 `review`。
+- `human-review <manifest.json> approve|return`：人工审核放行或打回。
+- `finalize <manifest.json> --tts-provider powershell_sapi|command|noop`：审核通过后执行后处理并完成打包。
 - `context-pack` 默认会阻断角色非法阶段请求；需要显式放行时使用 `--allow-disallowed-stage`。
 - 三个命令支持 `--session-id`，并会把状态与事件日志落盘到 `runtime/projects/<project_id>/` 与 `runtime/sessions/<session_id>/`。
 
@@ -95,6 +98,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
   - `POST /api/projects/tasks/update`
   - `POST /api/projects/context-pack`
   - `POST /api/projects/events/message`
+  - `GET /api/projects/{project_id}/events`
+  - `POST /api/projects/run-to-review`
+  - `POST /api/projects/review/decision`
+  - `GET /api/projects/{project_id}/review-return`
+  - `POST /api/projects/finalize`
 - 启动示例（安装 `api` 依赖后）：
 
 ```powershell

@@ -312,6 +312,7 @@ def persist_agent_message(
         EventType.WORKER_PROGRESS,
         EventType.WORKER_BLOCKER,
         EventType.WORKER_RESULT,
+        EventType.REVIEW_DRAFT,
         EventType.REVIEW_DECISION,
     }
     if event_type not in allowed_event_types:
@@ -366,6 +367,12 @@ def persist_agent_message(
                 task.last_progress = result_summary
                 task.last_progress_at = now
             should_persist_tasks = True
+        elif event_type == EventType.REVIEW_DRAFT:
+            result_summary = event_payload_data.get("summary")
+            if isinstance(result_summary, str) and result_summary.strip():
+                task.last_progress = result_summary
+                task.last_progress_at = now
+                should_persist_tasks = True
 
     previous_stage = plan.current_stage
     stage_overridden = False
@@ -376,7 +383,7 @@ def persist_agent_message(
         decision = event_payload_data.get("decision")
         if isinstance(decision, str):
             normalized = decision.strip().lower()
-            if normalized in {"blocked", "reject", "rejected"}:
+            if normalized in {"blocked", "reject", "rejected", "return"}:
                 plan.current_stage = PipelineStage.BLOCKED
                 stage_overridden = True
 
@@ -414,6 +421,47 @@ def persist_agent_message(
             cause_task_id=task_id,
         )
         _append_runtime_event(project_dir, session_dir, stage_changed_event)
+
+
+def persist_human_review_return(
+    plan: ProjectPlan,
+    session_id: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """落盘人工打回记录并写入 review.return 事件。"""
+    targets = ensure_runtime_targets(plan, session_id)
+    project_dir = targets["project_dir"]
+    session_dir = targets["session_dir"]
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"{timestamp}-review-return.json"
+    return_payload = {
+        "project_id": plan.project_id,
+        "session_id": session_dir.name,
+        "timestamp": _utc_now(),
+        "decision": "return",
+        **payload,
+    }
+    return_dir = session_dir / "review-returns"
+    return_path = return_dir / filename
+    latest_path = return_dir / "latest.json"
+    _write_json(return_path, return_payload)
+    _write_json(latest_path, return_payload)
+
+    event = _build_event(
+        EventType.REVIEW_RETURN,
+        plan.project_id,
+        session_dir.name,
+        role_id="human_reviewer",
+        stage=PipelineStage.REVIEW.value,
+        path=str(return_path),
+        payload=payload,
+    )
+    _append_runtime_event(project_dir, session_dir, event)
+    return {
+        "review_return": str(return_path),
+        "review_return_latest": str(latest_path),
+    }
 
 
 def load_execution_task_snapshot(plan: ProjectPlan) -> bool:

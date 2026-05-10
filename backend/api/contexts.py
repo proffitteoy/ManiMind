@@ -39,6 +39,7 @@ def create_context_pack(request: ContextPackRequest) -> dict[str, Any]:
             role_id=request.role_id,
             stage=request.stage,
             allow_disallowed_stage=request.allow_disallowed_stage,
+            session_id=request.session_id,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

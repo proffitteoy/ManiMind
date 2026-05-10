@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -41,9 +42,47 @@ def build_plan_from_manifest_payload(payload: dict[str, Any]):
 def read_json_if_exists(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    import json
-
     payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, dict):
         return payload
     raise HTTPException(status_code=500, detail=f"invalid_json_object: {path}")
+
+
+def resolve_manifest_payload(
+    manifest: dict[str, Any] | None = None,
+    manifest_path: str | None = None,
+) -> dict[str, Any]:
+    if manifest is not None:
+        return manifest
+    if manifest_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="missing_manifest: provide manifest or manifest_path",
+        )
+    path = Path(manifest_path)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"manifest_not_found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_manifest_json_object")
+    return payload
+
+
+def read_jsonl_events(path: Path, limit: int = 200) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    if limit <= 0:
+        return events
+    return events[-limit:]

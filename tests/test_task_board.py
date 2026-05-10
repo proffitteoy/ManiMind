@@ -53,9 +53,21 @@ def test_verification_nudge_when_non_review_tasks_done() -> None:
     )
     update_execution_task_status(
         plan=plan,
+        task_id="explore.references",
+        new_status=TaskStatus.COMPLETED,
+        actor_role="explorer",
+    )
+    update_execution_task_status(
+        plan=plan,
         task_id="summarize.research",
         new_status=TaskStatus.COMPLETED,
         actor_role="lead",
+    )
+    update_execution_task_status(
+        plan=plan,
+        task_id="plan.research_brief",
+        new_status=TaskStatus.COMPLETED,
+        actor_role="planner",
     )
     update_execution_task_status(
         plan=plan,
@@ -100,8 +112,17 @@ def test_verification_nudge_when_non_review_tasks_done() -> None:
         new_status=TaskStatus.COMPLETED,
         actor_role="reviewer",
     )
-    assert review_done.success is True
-    assert review_done.verification_nudge_needed is False
+    assert review_done.success is False
+    assert review_done.reason == "owner_mismatch"
+
+    review_done_by_human = update_execution_task_status(
+        plan=plan,
+        task_id="review.outputs",
+        new_status=TaskStatus.COMPLETED,
+        actor_role="human_reviewer",
+    )
+    assert review_done_by_human.success is True
+    assert review_done_by_human.verification_nudge_needed is False
 
     package_before_post = update_execution_task_status(
         plan=plan,

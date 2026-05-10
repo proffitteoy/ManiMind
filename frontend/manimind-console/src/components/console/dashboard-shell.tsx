@@ -48,24 +48,21 @@ export function DashboardShell() {
           <div className='relative flex flex-col gap-5'>
             <MobileNavigation navigation={consoleDemo.navigation} />
 
-            <header className='rounded-[34px] border border-white/75 bg-white/88 px-5 py-5 shadow-[0_30px_80px_rgba(99,102,241,0.08)] backdrop-blur-xl sm:px-7'>
-              <div className='flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between'>
+            <header className='rounded-[28px] border border-white/75 bg-white/90 px-5 py-4 shadow-[0_20px_60px_rgba(99,102,241,0.06)] backdrop-blur-xl sm:px-7'>
+              <div className='flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between'>
                 <div>
                   <div className='flex flex-wrap items-center gap-3'>
-                    <h1 className='font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-[2.35rem]'>
+                    <h1 className='font-display text-2xl font-semibold tracking-tight text-slate-950 sm:text-[2rem]'>
                       {consoleDemo.project.title}
                     </h1>
                     <Badge tone='success'>{consoleDemo.project.status}</Badge>
                   </div>
-                  <p className='mt-3 max-w-3xl text-sm leading-7 text-slate-500 sm:text-base'>
+                  <p className='mt-2 text-sm text-slate-500'>
                     {consoleDemo.project.subtitle}
                   </p>
-                  <div className='mt-3 text-sm font-medium text-indigo-600'>
-                    {consoleDemo.project.statusDetail}
-                  </div>
                 </div>
 
-                <div className='flex flex-wrap gap-3 xl:max-w-[560px] xl:justify-end'>
+                <div className='flex flex-wrap items-center gap-3'>
                   {consoleDemo.quickActions.map((action) => (
                     <QuickActionButton key={action.title} action={action} />
                   ))}
@@ -82,6 +79,7 @@ export function DashboardShell() {
               metrics={consoleDemo.metrics}
               agents={consoleDemo.agents}
               artifacts={consoleDemo.artifacts}
+              artifactScores={consoleDemo.artifactScores}
               capabilities={consoleDemo.capabilities}
               workflow={consoleDemo.workflow}
             />
@@ -180,14 +178,25 @@ function MobileNavigation({ navigation }: { navigation: NavItem[] }) {
 function QuickActionButton({ action }: { action: ActionItem }) {
   const Icon = actionIcons[action.icon];
 
+  if (action.icon === 'more') {
+    return (
+      <button
+        type='button'
+        className='inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200/80 bg-white text-slate-500 shadow-sm transition hover:border-indigo-200 hover:text-indigo-600'
+      >
+        <Icon className='h-4 w-4' />
+      </button>
+    );
+  }
+
   return (
     <button
       type='button'
       className={cn(
-        'inline-flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium transition',
+        'inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition',
         action.tone === 'primary'
-          ? 'border-indigo-500 bg-[linear-gradient(135deg,#4f46e5_0%,#6d28d9_100%)] text-white shadow-[0_18px_40px_rgba(79,70,229,0.24)] hover:-translate-y-0.5'
-          : 'border-slate-200/80 bg-white text-slate-700 shadow-[0_14px_30px_rgba(15,23,42,0.05)] hover:border-indigo-200 hover:text-indigo-700'
+          ? 'border-indigo-500 bg-[linear-gradient(135deg,#4f46e5_0%,#6d28d9_100%)] text-white shadow-[0_12px_30px_rgba(79,70,229,0.22)] hover:-translate-y-0.5'
+          : 'border-slate-200/80 bg-white text-slate-700 shadow-sm hover:border-indigo-200 hover:text-indigo-700'
       )}
     >
       <Icon className='h-4 w-4' />

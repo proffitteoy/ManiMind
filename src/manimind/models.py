@@ -57,6 +57,8 @@ class EventType(str, Enum):
     WORKER_PROGRESS = "worker.progress"
     WORKER_BLOCKER = "worker.blocker"
     WORKER_RESULT = "worker.result"
+    REVIEW_DRAFT = "review.draft"
+    REVIEW_RETURN = "review.return"
     REVIEW_DECISION = "review.decision"
     LEADER_COMMIT = "leader.commit"
     STAGE_CHANGED = "stage.changed"

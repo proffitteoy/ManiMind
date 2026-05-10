@@ -1,0 +1,56 @@
+{
+  "project_id": "max-function-review-demo",
+  "title": "极大函数审核链路样例",
+  "source_bundle": {
+    "paper_path": "tests/极大函数.md",
+    "note_paths": [],
+    "audience": "本科数学与科普观众",
+    "style_refs": [
+      "先直觉后公式",
+      "强调术语一致性",
+      "每段都要可审核回溯"
+    ]
+  },
+  "segments": [
+    {
+      "id": "seg-intro-html",
+      "title": "问题引入与术语约定",
+      "goal": "用可视化卡片引入极大函数与阈值集合",
+      "narration": "先解释研究问题，再给出核心符号和读法。",
+      "modality": "html",
+      "html_motion_notes": [
+        "卡片切换展示 f_+^*(x) 和 E_alpha^+",
+        "避免花哨动画，保证审阅可读"
+      ],
+      "estimated_seconds": 16
+    },
+    {
+      "id": "seg-proof-manim",
+      "title": "单侧极大函数证明主线",
+      "goal": "展示从定义到测度等式的推导链条",
+      "narration": "把关键不等式和区间分解过程分步呈现。",
+      "modality": "manim",
+      "formulas": [
+        "f_+^*(x)=\\sup_{h>0}\\frac{1}{h}\\int_x^{x+h}|f(y)|dy",
+        "m(E_\\alpha^+)=\\frac{1}{\\alpha}\\int_{E_\\alpha^+}|f(y)|dy"
+      ],
+      "estimated_seconds": 24
+    },
+    {
+      "id": "seg-vitali-hybrid",
+      "title": "Vitali 覆盖到双侧估计",
+      "goal": "串联 3^d 系数来源并给出结论",
+      "narration": "通过覆盖引理解释常数来源，再回到不等式结论。",
+      "modality": "hybrid",
+      "requires_svg_motion": true,
+      "formulas": [
+        "m(\\{f^*>\\alpha\\})\\le\\frac{3^d}{\\alpha}\\lVert f\\rVert_1"
+      ],
+      "html_motion_notes": [
+        "左侧示意覆盖球，右侧同步公式",
+        "结尾归纳审阅检查点"
+      ],
+      "estimated_seconds": 22
+    }
+  ]
+}

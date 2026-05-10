@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from typing import Callable
 
+from .bootstrap import sanitize_identifier
 from .models import AgentMode, ContextRecord, ContextScope, PipelineStage, ProjectPlan
 
 
@@ -104,6 +107,7 @@ def build_context_packet(
     role_id: str,
     stage: PipelineStage,
     allow_disallowed_stage: bool = False,
+    session_id: str | None = None,
 ) -> dict[str, object]:
     """按角色和阶段装配上下文包。"""
     profile = next((item for item in plan.agent_profiles if item.id == role_id), None)
@@ -148,6 +152,24 @@ def build_context_packet(
     if profile.mode == AgentMode.VERIFY_ONLY:
         constraints.append("当前角色仅可输出审核结论。")
 
+    human_feedback: dict[str, object] | None = None
+    if session_id:
+        safe_session_id = sanitize_identifier(session_id)
+        latest_return_path = (
+            Path(plan.runtime_layout.session_context_root)
+            / safe_session_id
+            / "review-returns"
+            / "latest.json"
+        )
+        if latest_return_path.exists():
+            payload = json.loads(latest_return_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                target_roles = payload.get("target_roles")
+                if isinstance(target_roles, list) and role_id not in target_roles:
+                    human_feedback = None
+                else:
+                    human_feedback = payload
+
     return {
         "project_id": plan.project_id,
         "role_id": profile.id,
@@ -161,6 +183,7 @@ def build_context_packet(
         "output_contract": profile.output_contract,
         "constraints": constraints,
         "runtime_layout": plan.runtime_layout.to_dict(),
+        "human_feedback": human_feedback,
     }
 
 
@@ -183,6 +206,28 @@ def build_default_prompt_sections(packet: dict[str, object]) -> list[PromptSecti
         header = "可用上下文："
         return "\n".join([header, *lines]) if lines else f"{header}\n- （空）"
 
+    def _human_feedback_section() -> str | None:
+        raw_feedback = packet.get("human_feedback")
+        if not isinstance(raw_feedback, dict):
+            return None
+        decision = raw_feedback.get("decision")
+        if not isinstance(decision, str) or decision.lower() != "return":
+            return None
+        reason = raw_feedback.get("reason")
+        must_fix = raw_feedback.get("must_fix")
+        should_keep = raw_feedback.get("should_keep")
+        prompt_patch = raw_feedback.get("prompt_patch")
+        lines = ["人工审核打回意见："]
+        if isinstance(reason, str) and reason.strip():
+            lines.append(f"- 打回原因：{reason.strip()}")
+        if isinstance(must_fix, str) and must_fix.strip():
+            lines.append(f"- 必须修改：{must_fix.strip()}")
+        if isinstance(should_keep, str) and should_keep.strip():
+            lines.append(f"- 保持不变：{should_keep.strip()}")
+        if isinstance(prompt_patch, str) and prompt_patch.strip():
+            lines.append(f"- 返工指令：{prompt_patch.strip()}")
+        return "\n".join(lines)
+
     def _output_section() -> str:
         targets = packet["write_targets"]  # type: ignore[index]
         if not targets:
@@ -195,6 +240,7 @@ def build_default_prompt_sections(packet: dict[str, object]) -> list[PromptSecti
 
     return [
         section("role", _role_section),
+        volatile_section("human_review_feedback", _human_feedback_section),
         section("context", _context_section),
         section("output", _output_section),
         volatile_section("guardrails", _guardrail_section),

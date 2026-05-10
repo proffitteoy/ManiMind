@@ -177,7 +177,13 @@ def test_derive_current_stage_from_task_statuses(tmp_path) -> None:
     task_by_id["ingest.sources"].status = TaskStatus.COMPLETED
     assert derive_current_stage(plan) == PipelineStage.SUMMARIZE
 
+    task_by_id["explore.references"].status = TaskStatus.COMPLETED
+    assert derive_current_stage(plan) == PipelineStage.SUMMARIZE
+
     task_by_id["summarize.research"].status = TaskStatus.COMPLETED
+    assert derive_current_stage(plan) == PipelineStage.PLAN
+
+    task_by_id["plan.research_brief"].status = TaskStatus.COMPLETED
     assert derive_current_stage(plan) == PipelineStage.PLAN
 
     task_by_id["plan.storyboard"].status = TaskStatus.COMPLETED

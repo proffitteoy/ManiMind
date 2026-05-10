@@ -49,6 +49,7 @@ export type RuntimeAsset = {
 export type ContextItem = {
   title: string;
   summary: string;
+  icon: 'target' | 'users' | 'formula' | 'constraint' | 'book';
 };
 
 export type EventItem = {
@@ -77,7 +78,14 @@ export type ArtifactItem = {
   version: string;
   caption: string;
   gradient: string;
+  updatedAt: string;
 };
+
+export type ArtifactScore = {
+  label: string;
+  value: number;
+};
+
 
 export type WorkflowStep = {
   index: number;
@@ -183,10 +191,11 @@ export const consoleDemo = {
     { title: 'context-records.json', state: '已落盘', updatedAt: '10:17:58' }
   ] satisfies RuntimeAsset[],
   contextItems: [
-    { title: '项目目标', summary: '生成高质量数学科普动画' },
-    { title: '受众与风格', summary: '中学生，严谨易懂，视觉统一' },
-    { title: '关键公式', summary: 'Euler 公式、泰勒展开、级数收敛' },
-    { title: '参考资料', summary: '8 篇论文，5 本教材，12 个网页片段' }
+    { title: '项目目标', summary: '生成高质量数学科普动画', icon: 'target' },
+    { title: '受众与风格', summary: '中学生，产谨易懂，视觉...', icon: 'users' },
+    { title: '关键公式', summary: 'Euler 公式、泰勒展开、级数...', icon: 'formula' },
+    { title: '约束条件', summary: '时长 8-12 分钟, 16:9, 中文...', icon: 'constraint' },
+    { title: '参考资料', summary: '8 篇论文，5 本教材，12 个网页', icon: 'book' }
   ] satisfies ContextItem[],
   events: [
     {
@@ -204,7 +213,7 @@ export const consoleDemo = {
     {
       at: '10:17:20',
       type: 'task.updated',
-      detail: '任务状态更新为 in_progress',
+      detail: '任务 aT-104 状态更新为 in_progress',
       tone: 'warning'
     },
     {
@@ -241,27 +250,39 @@ export const consoleDemo = {
       title: '讲解脚本',
       version: 'v0.3',
       caption: '用于串联公式、叙事与口播节奏',
-      gradient: 'from-sky-100 via-white to-indigo-100'
+      gradient: 'from-sky-100 via-white to-indigo-100',
+      updatedAt: '更新于 10:17'
     },
     {
       title: '分镜',
       version: 'v0.2',
       caption: '镜头节奏、字幕节拍、说明层级',
-      gradient: 'from-orange-100 via-white to-rose-100'
+      gradient: 'from-orange-100 via-white to-rose-100',
+      updatedAt: '更新于 10:18'
     },
     {
       title: 'Manim 动画',
       version: 'v0.1',
       caption: '基础图元与公式演化预览',
-      gradient: 'from-slate-900 via-slate-950 to-indigo-950'
+      gradient: 'from-slate-900 via-slate-950 to-indigo-950',
+      updatedAt: '更新于 10:16'
     },
     {
       title: '审核报告',
       version: 'v0.1',
       caption: '术语一致性与事实核查',
-      gradient: 'from-emerald-100 via-white to-teal-100'
+      gradient: 'from-emerald-100 via-white to-teal-100',
+      updatedAt: '更新于 10:17'
     }
   ] satisfies ArtifactItem[],
+  artifactScores: [
+    { label: '评分', value: 92 },
+    { label: '内容准确性', value: 95 },
+    { label: '逻辑连贯性', value: 90 },
+    { label: '视觉表达', value: 91 },
+    { label: '语言表达', value: 92 },
+    { label: '问答质量', value: 88 }
+  ] satisfies ArtifactScore[],
   capabilities: [
     '导入 manifest / PDF / 笔记',
     '查看阶段流',

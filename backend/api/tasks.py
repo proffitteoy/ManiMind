@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from manimind.artifact_store import has_output_key
 from manimind.models import TaskStatus
 from manimind.runtime_store import load_execution_task_snapshot, persist_task_update
 from manimind.task_board import update_execution_task_status
@@ -48,6 +49,7 @@ def update_task(request: TaskUpdateRequest) -> dict[str, Any]:
         task_id=request.task_id,
         new_status=request.status,
         actor_role=request.actor_role,
+        output_checker=lambda key: has_output_key(plan, request.session_id, key),
     )
     mutation = {
         "success": result.success,

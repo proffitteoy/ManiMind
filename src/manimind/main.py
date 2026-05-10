@@ -1,4 +1,4 @@
-"""ManiMind 命令行入口。"""
+"""ManiMind CLI 入口。"""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ import json
 from pathlib import Path
 
 from .bootstrap import check_tools, ensure_workspace, sanitize_identifier
+from .artifact_store import has_output_key
 from .context_assembly import (
     PromptSectionCache,
     build_context_packet,
     build_default_prompt_sections,
 )
+from .executor import run_to_review
 from .models import (
     EventType,
     PipelineStage,
@@ -20,6 +22,8 @@ from .models import (
     SourceBundle,
     TaskStatus,
 )
+from .post_produce import finalize_delivery
+from .review_workflow import apply_human_review_decision
 from .runtime_store import (
     load_execution_task_snapshot,
     persist_agent_message,
@@ -34,12 +38,10 @@ DEFAULT_SESSION_ID = "manual-session"
 
 
 def _load_manifest(manifest_path: Path) -> dict:
-    """加载项目清单。"""
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
 def _build_segments(raw_segments: list[dict]) -> list[SegmentSpec]:
-    """把清单中的镜头定义转换为数据模型。"""
     return [
         SegmentSpec(
             id=item["id"],
@@ -57,7 +59,6 @@ def _build_segments(raw_segments: list[dict]) -> list[SegmentSpec]:
 
 
 def build_plan_from_manifest(manifest_path: Path) -> dict:
-    """从 JSON 清单生成标准项目计划。"""
     payload = _load_manifest(manifest_path)
     source_bundle = SourceBundle(**payload["source_bundle"])
     segments = _build_segments(payload["segments"])
@@ -71,7 +72,6 @@ def build_plan_from_manifest(manifest_path: Path) -> dict:
 
 
 def _build_plan_model_from_manifest(manifest_path: Path):
-    """从 JSON 清单构建项目计划模型对象。"""
     payload = _load_manifest(manifest_path)
     source_bundle = SourceBundle(**payload["source_bundle"])
     segments = _build_segments(payload["segments"])
@@ -83,8 +83,7 @@ def _build_plan_model_from_manifest(manifest_path: Path):
     )
 
 
-def main() -> None:
-    """CLI 主流程。"""
+def _configure_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ManiMind 项目工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -101,7 +100,8 @@ def main() -> None:
     )
 
     context_parser = subparsers.add_parser(
-        "context-pack", help="按角色与阶段装配上下文包"
+        "context-pack",
+        help="按角色与阶段装配上下文包",
     )
     context_parser.add_argument("manifest", type=Path)
     context_parser.add_argument("role_id", type=str)
@@ -123,9 +123,7 @@ def main() -> None:
         help="允许在角色未声明支持的阶段生成 context packet",
     )
 
-    task_parser = subparsers.add_parser(
-        "task-update", help="按状态机规则推进执行任务"
-    )
+    task_parser = subparsers.add_parser("task-update", help="按状态机规则推进执行任务")
     task_parser.add_argument("manifest", type=Path)
     task_parser.add_argument("task_id", type=str)
     task_parser.add_argument("status", type=str)
@@ -138,7 +136,8 @@ def main() -> None:
     )
 
     message_parser = subparsers.add_parser(
-        "agent-message", help="写入 worker/reviewer 结构化消息事件"
+        "agent-message",
+        help="写入 worker/reviewer 结构化消息事件",
     )
     message_parser.add_argument("manifest", type=Path)
     message_parser.add_argument("event_type", type=str)
@@ -163,6 +162,64 @@ def main() -> None:
         help="消息写入对应的会话标识",
     )
 
+    run_parser = subparsers.add_parser(
+        "run-to-review",
+        help="按最小闭环把流程推进到 review 阶段",
+    )
+    run_parser.add_argument("manifest", type=Path)
+    run_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="执行链路对应的会话标识",
+    )
+
+    review_parser = subparsers.add_parser(
+        "human-review",
+        help="人工审核决定（approve 或 return）",
+    )
+    review_parser.add_argument("manifest", type=Path)
+    review_parser.add_argument("decision", type=str, help="approve 或 return")
+    review_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="人工审核对应的会话标识",
+    )
+    review_parser.add_argument("--reason", type=str, default=None)
+    review_parser.add_argument("--must-fix", type=str, default=None)
+    review_parser.add_argument("--should-keep", type=str, default=None)
+    review_parser.add_argument("--prompt-patch", type=str, default=None)
+    review_parser.add_argument(
+        "--target-roles",
+        type=str,
+        default="coordinator,reviewer,html_worker,manim_worker,svg_worker",
+        help="逗号分隔目标角色，仅 return 时有效",
+    )
+
+    finalize_parser = subparsers.add_parser(
+        "finalize",
+        help="在审核通过后执行后处理并完成 package",
+    )
+    finalize_parser.add_argument("manifest", type=Path)
+    finalize_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="后处理对应的会话标识",
+    )
+    finalize_parser.add_argument(
+        "--tts-provider",
+        type=str,
+        default="powershell_sapi",
+        help="TTS provider: powershell_sapi | command | noop",
+    )
+
+    return parser
+
+
+def main() -> None:
+    parser = _configure_parser()
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -202,9 +259,11 @@ def main() -> None:
                 role_id=args.role_id,
                 stage=stage,
                 allow_disallowed_stage=args.allow_disallowed_stage,
+                session_id=args.session_id,
             )
         except PermissionError as exc:
             raise SystemExit(str(exc)) from exc
+
         output: dict[str, object] = {"context_packet": packet}
         prompt_sections: list[str] | None = None
         if args.render_prompt_sections:
@@ -228,6 +287,7 @@ def main() -> None:
             task_id=args.task_id,
             new_status=TaskStatus(args.status),
             actor_role=args.actor_role,
+            output_checker=lambda key: has_output_key(plan, args.session_id, key),
         )
         mutation = {
             "success": result.success,
@@ -292,8 +352,7 @@ def main() -> None:
                     "payload": payload,
                     "persisted_paths": {
                         "project_events": str(
-                            Path(plan.runtime_layout.project_context_dir)
-                            / "events.jsonl"
+                            Path(plan.runtime_layout.project_context_dir) / "events.jsonl"
                         ),
                         "session_events": str(
                             Path(plan.runtime_layout.session_context_root)
@@ -301,6 +360,76 @@ def main() -> None:
                             / "events.jsonl"
                         ),
                     },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "run-to-review":
+        plan = _build_plan_model_from_manifest(args.manifest)
+        result = run_to_review(
+            plan=plan,
+            session_id=args.session_id,
+            source_manifest=str(args.manifest),
+        )
+        print(
+            json.dumps(
+                {
+                    "result": result,
+                    "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "human-review":
+        plan = _build_plan_model_from_manifest(args.manifest)
+        load_execution_task_snapshot(plan)
+        target_roles = [item.strip() for item in args.target_roles.split(",") if item.strip()]
+        try:
+            result = apply_human_review_decision(
+                plan=plan,
+                session_id=args.session_id,
+                decision=args.decision,
+                reason=args.reason,
+                must_fix=args.must_fix,
+                should_keep=args.should_keep,
+                prompt_patch=args.prompt_patch,
+                target_roles=target_roles or None,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(
+            json.dumps(
+                {
+                    "result": result,
+                    "current_stage": plan.current_stage.value,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "finalize":
+        plan = _build_plan_model_from_manifest(args.manifest)
+        try:
+            result = finalize_delivery(
+                plan=plan,
+                session_id=args.session_id,
+                tts_provider=args.tts_provider,
+            )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(
+            json.dumps(
+                {
+                    "result": result,
+                    "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
                 },
                 ensure_ascii=False,
                 indent=2,
