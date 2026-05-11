@@ -227,20 +227,20 @@ function RuntimePanel({ runtimeAssets }: { runtimeAssets: RuntimeAsset[] }) {
       <div className='mb-4 flex items-center justify-between'>
         <div className='flex items-center gap-2'>
           <span className='flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500 text-xs font-bold text-white'>B</span>
-          <h2 className='text-base font-semibold text-slate-900'>项目 Runtime</h2>
+          <h2 className='text-base font-semibold text-slate-900'>项目运行时</h2>
         </div>
         <Badge tone='success'>事实源</Badge>
       </div>
-      <p className='mb-4 text-xs text-slate-500'>Runtime 驱动的单一事实源</p>
+      <p className='mb-4 text-xs text-slate-500'>运行时驱动的单一事实源</p>
 
       <div className='space-y-2.5'>
         {runtimeAssets.map((asset) => (
-          <div key={asset.title} className='flex items-center justify-between rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5'>
-            <div className='flex items-center gap-2.5'>
-              <FileText className='h-4 w-4 text-indigo-500' />
-              <span className='text-sm font-medium text-slate-900'>{asset.title}</span>
+          <div key={asset.title} className='flex items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5'>
+            <div className='flex min-w-0 items-center gap-2.5'>
+              <FileText className='h-4 w-4 shrink-0 text-indigo-500' />
+              <span className='truncate text-sm font-medium text-slate-900'>{asset.title}</span>
             </div>
-            <div className='flex items-center gap-2'>
+            <div className='flex shrink-0 items-center gap-2'>
               <Badge tone={asset.state === '最新' ? 'active' : 'success'}>{asset.state}</Badge>
               <span className='text-xs text-slate-400'>{asset.updatedAt}</span>
             </div>
@@ -248,7 +248,7 @@ function RuntimePanel({ runtimeAssets }: { runtimeAssets: RuntimeAsset[] }) {
         ))}
       </div>
       <button type='button' className='mt-4 flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-800'>
-        打开 Runtime 目录 <ArrowRight className='h-3.5 w-3.5' />
+        打开运行时目录 <ArrowRight className='h-3.5 w-3.5' />
       </button>
     </Panel>
   );
@@ -262,7 +262,7 @@ function ContextPanel({ contextItems }: { contextItems: ContextItem[] }) {
       <div className='mb-4 flex items-center justify-between'>
         <div className='flex items-center gap-2'>
           <span className='flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500 text-xs font-bold text-white'>C</span>
-          <h2 className='text-base font-semibold text-slate-900'>Context Packet</h2>
+          <h2 className='text-base font-semibold text-slate-900'>上下文包</h2>
         </div>
         <span className='text-xs text-slate-400'>最新 10:18</span>
       </div>
@@ -299,7 +299,7 @@ function EventPanel({ events }: { events: EventItem[] }) {
         <div className='flex items-center gap-2'>
           <span className='flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500 text-xs font-bold text-white'>D</span>
           <h2 className='text-base font-semibold text-slate-900'>事件日志</h2>
-          <span className='text-xs text-slate-400'>events.jsonl</span>
+          <span className='text-xs text-slate-400'>事件流</span>
         </div>
         <span className='text-xs text-slate-400'>最新 10:18</span>
       </div>
@@ -470,7 +470,7 @@ function CapabilityPanel({ capabilities }: { capabilities: string[] }) {
     <Panel className='p-5'>
       <div className='mb-4 flex items-center gap-2'>
         <Zap className='h-4 w-4 text-indigo-500' />
-        <h2 className='text-base font-semibold text-slate-900'>控制台 MVP 能力</h2>
+        <h2 className='text-base font-semibold text-slate-900'>控制台核心能力</h2>
       </div>
       <div className='space-y-2'>
         {capabilities.map((capability) => (

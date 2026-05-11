@@ -19,7 +19,7 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
   const [reason, setReason] = useState('请补齐数学定义一致性并收敛镜头节奏。');
   const [mustFix, setMustFix] = useState('修复术语不一致；补全关键公式解释。');
   const [promptPatch, setPromptPatch] = useState(
-    '下一轮生成请先统一术语，再按“问题-直觉-公式-结论”的结构输出。'
+    '下一轮生成请先统一术语，再按”问题-直觉-公式-结论”的结构输出。'
   );
   const [targetRoles, setTargetRoles] = useState(defaultReturnRoles);
   const [state, setState] = useState<ActionState>({ loading: false, message: '' });
@@ -34,7 +34,7 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(body?.detail ?? `request_failed:${response.status}`);
+      throw new Error(body?.detail ?? `请求失败：${response.status}`);
     }
     return body;
   }
@@ -59,29 +59,29 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
     <section className='rounded-[24px] border border-white/70 bg-white/88 p-5 shadow-[0_25px_60px_rgba(99,102,241,0.08)] backdrop-blur-xl'>
       <h2 className='text-lg font-semibold text-slate-900'>执行与人工审核</h2>
       <p className='mt-2 text-sm text-slate-500'>
-        先执行 <code>run-to-review</code>，再做人工 <code>approve</code> 或 <code>return</code>。
+        先执行流水线到审核关卡，再做人工通过或退回。
       </p>
 
-      <div className='mt-4 grid gap-3 sm:grid-cols-3'>
+      <div className='mt-4 grid gap-3 sm:grid-cols-4'>
         <button
           type='button'
           disabled={state.loading}
           className='rounded-xl border border-indigo-500 bg-indigo-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60'
           onClick={() =>
-            execute('Run To Review', '/api/projects/run-to-review', {
+            execute('执行到审核', '/api/projects/run-to-review', {
               manifest_path: manifestPath,
               session_id: sessionId
             })
           }
         >
-          Run To Review
+          执行到审核
         </button>
         <button
           type='button'
           disabled={state.loading}
           className='rounded-xl border border-emerald-500 bg-emerald-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60'
           onClick={() =>
-            execute('Approve', '/api/projects/review/decision', {
+            execute('通过', '/api/projects/review/decision', {
               manifest_path: manifestPath,
               session_id: sessionId,
               decision: 'approve',
@@ -89,14 +89,14 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
             })
           }
         >
-          Approve
+          通过
         </button>
         <button
           type='button'
           disabled={state.loading}
           className='rounded-xl border border-amber-500 bg-amber-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60'
           onClick={() =>
-            execute('Return', '/api/projects/review/decision', {
+            execute('退回', '/api/projects/review/decision', {
               manifest_path: manifestPath,
               session_id: sessionId,
               decision: 'return',
@@ -110,29 +110,27 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
             })
           }
         >
-          Return
+          退回
         </button>
-      </div>
-      <div className='mt-3'>
         <button
           type='button'
           disabled={state.loading}
           className='rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60'
           onClick={() =>
-            execute('Finalize', '/api/projects/finalize', {
+            execute('终稿打包', '/api/projects/finalize', {
               manifest_path: manifestPath,
               session_id: sessionId,
               tts_provider: 'powershell_sapi'
             })
           }
         >
-          Finalize (Post Produce + Package)
+          终稿打包
         </button>
       </div>
 
       <div className='mt-4 grid gap-3'>
         <label className='grid gap-1 text-sm text-slate-600'>
-          Reason
+          审核原因
           <input
             value={reason}
             onChange={(event) => setReason(event.target.value)}
@@ -140,7 +138,7 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
           />
         </label>
         <label className='grid gap-1 text-sm text-slate-600'>
-          Must Fix
+          必须修复项
           <input
             value={mustFix}
             onChange={(event) => setMustFix(event.target.value)}
@@ -148,7 +146,7 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
           />
         </label>
         <label className='grid gap-1 text-sm text-slate-600'>
-          Prompt Patch
+          提示词补丁
           <textarea
             value={promptPatch}
             onChange={(event) => setPromptPatch(event.target.value)}
@@ -157,7 +155,7 @@ export function ReviewActions({ apiBaseUrl, manifestPath, sessionId }: ReviewAct
           />
         </label>
         <label className='grid gap-1 text-sm text-slate-600'>
-          Target Roles (comma separated)
+          目标角色（逗号分隔）
           <input
             value={targetRoles}
             onChange={(event) => setTargetRoles(event.target.value)}

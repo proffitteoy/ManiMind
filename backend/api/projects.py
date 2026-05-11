@@ -54,3 +54,29 @@ def get_project_runtime(project_id: str) -> dict[str, Any]:
         "execution_tasks": read_json_if_exists(project_dir / "execution-tasks.json"),
         "project_plan": read_json_if_exists(project_dir / "project-plan.json"),
     }
+
+
+@router.get("/{project_id}/review-evidence")
+def get_review_evidence(project_id: str) -> dict[str, Any]:
+    layout = build_runtime_layout(project_id)
+    project_dir = Path(layout.project_context_dir)
+    artifacts_dir = project_dir / "artifacts"
+    evidence_path = artifacts_dir / f"{project_id}.review.evidence.json"
+    evidence = read_json_if_exists(evidence_path)
+    return {
+        "project_id": project_id,
+        "evidence": evidence,
+    }
+
+
+@router.get("/{project_id}/narration-script")
+def get_narration_script(project_id: str) -> dict[str, Any]:
+    layout = build_runtime_layout(project_id)
+    project_dir = Path(layout.project_context_dir)
+    artifacts_dir = project_dir / "artifacts"
+    script_path = artifacts_dir / f"{project_id}.narration.script.json"
+    script = read_json_if_exists(script_path)
+    return {
+        "project_id": project_id,
+        "script": script,
+    }

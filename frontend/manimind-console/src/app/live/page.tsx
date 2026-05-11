@@ -1,192 +1,145 @@
-import { Badge } from '@/components/ui/badge';
 import { Panel } from '@/components/ui/panel';
-
-import { ReviewActions } from './review-actions';
+import { Badge } from '@/components/ui/badge';
+import {
+  transformStages,
+  transformMetrics,
+  transformEvents,
+  transformAgents,
+  type RuntimeResponse,
+  type EventsResponse
+} from '@/lib/live-transform';
 
 export const dynamic = 'force-dynamic';
 
-type SearchParams = {
-  project_id?: string;
-  session_id?: string;
-  manifest_path?: string;
-};
+const API_BASE =
+  process.env.NEXT_PUBLIC_MANIMIND_API_BASE_URL ??
+  process.env.MANIMIND_API_BASE_URL ??
+  'http://127.0.0.1:8000';
 
-type RuntimeResponse = {
-  project_id: string;
-  state?: { current_stage?: string };
-  execution_tasks?: { execution_tasks?: TaskSnapshot[] };
-  context_records?: { contexts?: ContextSnapshot[] };
-};
-
-type TaskSnapshot = {
-  id: string;
-  stage: string;
-  owner_role: string;
-  status: string;
-  last_progress?: string | null;
-  blocked_reason?: string | null;
-};
-
-type ContextSnapshot = {
-  key: string;
-  scope: string;
-  writer_role: string;
-};
-
-type EventsResponse = {
-  project_events?: EventSnapshot[];
-  session_events?: EventSnapshot[];
-};
-
-type EventSnapshot = {
-  timestamp?: string;
-  event?: string;
-  role_id?: string;
-  task_id?: string;
-};
-
-type ReviewReturnResponse = {
-  payload?: Record<string, unknown> | null;
-};
+const PROJECT_ID = 'max-function-review-demo';
+const SESSION_ID = 'manual-session';
 
 async function fetchJson<T>(url: string): Promise<T | null> {
   try {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) {
-      return null;
-    }
-    return (await response.json()) as T;
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
   } catch {
     return null;
   }
 }
 
-function toneByStage(stage: string | undefined): 'neutral' | 'active' | 'success' {
-  if (stage === 'review') {
-    return 'active';
-  }
-  if (stage === 'done') {
-    return 'success';
-  }
-  return 'neutral';
-}
-
-export default async function LivePage({
-  searchParams
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
-  const params = await searchParams;
-  const projectId = params.project_id ?? 'max-function-review-demo';
-  const sessionId = params.session_id ?? 'manual-session';
-  const manifestPath = params.manifest_path ?? 'configs/max-function-review-demo.json';
-  const apiBaseUrl =
-    process.env.NEXT_PUBLIC_MANIMIND_API_BASE_URL ??
-    process.env.MANIMIND_API_BASE_URL ??
-    'http://127.0.0.1:8000';
-
+export default async function LiveOverviewPage() {
   const runtime = await fetchJson<RuntimeResponse>(
-    `${apiBaseUrl}/api/projects/${encodeURIComponent(projectId)}/runtime`
+    `${API_BASE}/api/projects/${PROJECT_ID}/runtime`
   );
   const events = await fetchJson<EventsResponse>(
-    `${apiBaseUrl}/api/projects/${encodeURIComponent(projectId)}/events?session_id=${encodeURIComponent(sessionId)}&limit=50`
-  );
-  const reviewReturn = await fetchJson<ReviewReturnResponse>(
-    `${apiBaseUrl}/api/projects/${encodeURIComponent(projectId)}/review-return?session_id=${encodeURIComponent(sessionId)}`
+    `${API_BASE}/api/projects/${PROJECT_ID}/events?session_id=${SESSION_ID}&limit=50`
   );
 
   const tasks = runtime?.execution_tasks?.execution_tasks ?? [];
-  const contexts = runtime?.context_records?.contexts ?? [];
-  const sessionEvents = events?.session_events ?? [];
-  const projectEvents = events?.project_events ?? [];
-  const stage = runtime?.state?.current_stage;
-  const latestReturn = reviewReturn?.payload ?? null;
+  const allEvents = events?.session_events ?? events?.project_events ?? [];
+  const profiles = runtime?.project_plan?.plan?.agent_profiles ?? [];
+  const currentStage = runtime?.state?.current_stage ?? 'unknown';
+  const projectTitle = runtime?.project_plan?.plan?.title ?? PROJECT_ID;
+
+  const stages = transformStages(runtime?.state ?? null, allEvents);
+  const metrics = transformMetrics(tasks);
+  const recentEvents = transformEvents(allEvents);
+  const agents = transformAgents(profiles, tasks);
 
   return (
-    <main className='min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.16),transparent_22%),radial-gradient(circle_at_top_right,rgba(56,189,248,0.12),transparent_24%),linear-gradient(180deg,#eef4ff_0%,#f7f9fc_42%,#f4f7fb_100%)] px-4 py-6 text-slate-900 sm:px-6 lg:px-8'>
-      <div className='mx-auto flex w-full max-w-[1400px] flex-col gap-5'>
-        <Panel className='p-6'>
-          <div className='flex flex-wrap items-center justify-between gap-3'>
-            <div>
-              <h1 className='text-2xl font-semibold text-slate-900'>ManiMind Live Console</h1>
-              <p className='mt-2 text-sm text-slate-600'>
-                project_id=<code>{projectId}</code>，session_id=<code>{sessionId}</code>
-              </p>
-              <p className='mt-1 text-sm text-slate-600'>
-                manifest_path=<code>{manifestPath}</code>
-              </p>
+    <>
+      <header className='rounded-[24px] border border-white/75 bg-white/90 px-5 py-4 shadow-[0_20px_60px_rgba(99,102,241,0.06)] backdrop-blur-xl sm:px-7'>
+        <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div>
+            <h1 className='text-2xl font-semibold tracking-tight text-slate-950'>{projectTitle}</h1>
+            <p className='mt-1 text-sm text-slate-500'>从输入到交付的闭环控制</p>
+          </div>
+          <Badge tone={currentStage === 'done' ? 'success' : 'active'}>
+            {currentStage.toUpperCase()}
+          </Badge>
+        </div>
+      </header>
+
+      <Panel className='px-6 py-5'>
+        <h2 className='mb-4 text-base font-semibold text-slate-900'>阶段流水线</h2>
+        <div className='flex items-center justify-between gap-2'>
+          {stages.map((stage) => (
+            <div key={stage.key} className='flex flex-col items-center gap-1 text-center'>
+              <div className={`flex h-10 w-10 items-center justify-center rounded-full text-xs font-bold ${stage.status === 'done' ? 'bg-emerald-500 text-white' : stage.status === 'active' ? 'bg-indigo-500 text-white ring-4 ring-indigo-100' : 'bg-slate-100 text-slate-400'}`}>
+                {stage.status === 'done' ? '✓' : stage.status === 'active' ? '▶' : '○'}
+              </div>
+              <span className={`text-[11px] font-medium ${stage.status === 'done' ? 'text-slate-900' : stage.status === 'active' ? 'text-indigo-700' : 'text-slate-400'}`}>
+                {stage.title}
+              </span>
+              <span className='text-[10px] text-slate-400'>{stage.at}</span>
             </div>
-            <div className='flex items-center gap-2'>
-              <Badge tone={toneByStage(stage)}>{stage ?? 'unknown'}</Badge>
-              <Badge tone='neutral'>tasks:{tasks.length}</Badge>
-              <Badge tone='neutral'>events:{sessionEvents.length}</Badge>
-            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <div className='grid gap-5 lg:grid-cols-2'>
+        <Panel className='p-5'>
+          <h2 className='mb-4 text-base font-semibold text-slate-900'>系统概览</h2>
+          <div className='grid grid-cols-2 gap-3'>
+            {metrics.map((m) => (
+              <div key={m.title} className='rounded-xl border border-slate-200/80 bg-slate-50/70 p-3'>
+                <div className='text-xs text-slate-500'>{m.title}</div>
+                <div className='mt-1 text-2xl font-bold text-slate-900'>{m.value}</div>
+                <div className='mt-1 text-[11px] text-slate-500'>{m.delta}</div>
+              </div>
+            ))}
           </div>
         </Panel>
 
-        <ReviewActions apiBaseUrl={apiBaseUrl} manifestPath={manifestPath} sessionId={sessionId} />
-
-        <div className='grid gap-5 xl:grid-cols-3'>
-          <Panel className='xl:col-span-2'>
-            <h2 className='text-lg font-semibold text-slate-900'>Execution Tasks</h2>
-            <div className='mt-4 overflow-auto rounded-xl border border-slate-200'>
-              <table className='min-w-full text-sm'>
-                <thead className='bg-slate-50 text-left text-slate-500'>
-                  <tr>
-                    <th className='px-3 py-2'>Task</th>
-                    <th className='px-3 py-2'>Stage</th>
-                    <th className='px-3 py-2'>Owner</th>
-                    <th className='px-3 py-2'>Status</th>
-                    <th className='px-3 py-2'>Progress / Blocker</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tasks.map((task) => (
-                    <tr key={task.id} className='border-t border-slate-200'>
-                      <td className='px-3 py-2 font-medium text-slate-900'>{task.id}</td>
-                      <td className='px-3 py-2 text-slate-600'>{task.stage}</td>
-                      <td className='px-3 py-2 text-slate-600'>{task.owner_role}</td>
-                      <td className='px-3 py-2 text-slate-600'>{task.status}</td>
-                      <td className='px-3 py-2 text-slate-600'>
-                        {task.blocked_reason ?? task.last_progress ?? '-'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <Panel className='p-5'>
+          <h2 className='mb-4 text-base font-semibold text-slate-900'>最近事件</h2>
+          {recentEvents.length === 0 ? (
+            <p className='text-sm text-slate-400'>暂无事件</p>
+          ) : (
+            <div className='space-y-0'>
+              {recentEvents.map((ev, i) => (
+                <div key={`${ev.at}-${i}`} className='flex gap-3'>
+                  <div className='flex flex-col items-center'>
+                    <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${ev.tone === 'critical' ? 'bg-rose-500' : ev.tone === 'success' ? 'bg-emerald-500' : ev.tone === 'warning' ? 'bg-amber-500' : 'bg-indigo-500'}`} />
+                    {i < recentEvents.length - 1 && <span className='mt-1 h-full w-px bg-slate-200' />}
+                  </div>
+                  <div className='pb-3'>
+                    <div className='flex items-center gap-2'>
+                      <span className='text-xs text-slate-400'>{ev.at}</span>
+                      <span className='text-xs font-semibold text-slate-600'>{ev.type}</span>
+                    </div>
+                    <div className='mt-0.5 text-xs text-slate-600'>{ev.detail}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-          </Panel>
-
-          <Panel>
-            <h2 className='text-lg font-semibold text-slate-900'>Latest Return Memo</h2>
-            <pre className='mt-4 max-h-[320px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-700'>
-              {latestReturn ? JSON.stringify(latestReturn, null, 2) : 'No return memo.'}
-            </pre>
-          </Panel>
-        </div>
-
-        <div className='grid gap-5 xl:grid-cols-2'>
-          <Panel>
-            <h2 className='text-lg font-semibold text-slate-900'>Session Events</h2>
-            <pre className='mt-4 max-h-[320px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-700'>
-              {JSON.stringify(sessionEvents, null, 2)}
-            </pre>
-          </Panel>
-          <Panel>
-            <h2 className='text-lg font-semibold text-slate-900'>Context Records (sample)</h2>
-            <pre className='mt-4 max-h-[320px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-700'>
-              {JSON.stringify(contexts.slice(0, 20), null, 2)}
-            </pre>
-          </Panel>
-        </div>
-
-        <Panel>
-          <h2 className='text-lg font-semibold text-slate-900'>Project Events (tail)</h2>
-          <pre className='mt-4 max-h-[260px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-700'>
-            {JSON.stringify(projectEvents.slice(-30), null, 2)}
-          </pre>
+          )}
         </Panel>
       </div>
-    </main>
+
+      {agents.length > 0 && (
+        <Panel className='p-5'>
+          <h2 className='mb-4 text-base font-semibold text-slate-900'>Agent 状态</h2>
+          <div className='overflow-hidden rounded-xl border border-slate-200/80'>
+            <div className='grid grid-cols-4 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-500'>
+              <span>角色</span><span>状态</span><span>完成率</span><span>任务数</span>
+            </div>
+            {agents.map((a) => (
+              <div key={a.name} className='grid grid-cols-4 items-center border-t border-slate-100 px-3 py-2 text-xs text-slate-700'>
+                <span className='font-medium text-slate-900'>{a.name}</span>
+                <span className='inline-flex items-center gap-1.5'>
+                  <span className={`h-2 w-2 rounded-full ${a.status === '繁忙' ? 'bg-amber-500' : a.status === '待命' ? 'bg-slate-300' : 'bg-emerald-500'}`} />
+                  {a.status}
+                </span>
+                <span>{a.successRate}</span>
+                <span>{a.todayTasks}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </>
   );
 }

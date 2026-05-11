@@ -86,8 +86,32 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 - `run-to-review <manifest.json>`：执行 ingest/summarize/plan/dispatch，并推进到 `review`。
 - `human-review <manifest.json> approve|return`：人工审核放行或打回。
 - `finalize <manifest.json> --tts-provider powershell_sapi|command|noop`：审核通过后执行后处理并完成打包。
+- `finalize` 会尝试调用 `ffmpeg` 合并 `manim` 片段，生成 `outputs/<project_id>/video/segments-merged.mp4`；若有真实 wav 配音会继续生成 `final-with-audio.mp4`。
 - `context-pack` 默认会阻断角色非法阶段请求；需要显式放行时使用 `--allow-disallowed-stage`。
 - 三个命令支持 `--session-id`，并会把状态与事件日志落盘到 `runtime/projects/<project_id>/` 与 `runtime/sessions/<session_id>/`。
+
+### LLM 配置（Responses API）
+
+如需启用真实模型推理，至少配置：
+
+- `OPENAI_API_KEY`
+- `MANIMIND_MODEL_BASE_URL`（例如 `https://api.apipool.dev`）
+- `MANIMIND_MODEL`（例如 `gpt-5.5`）
+
+可选配置：
+
+- `MANIMIND_REVIEW_MODEL`（默认同 `MANIMIND_MODEL`）
+- `MANIMIND_MODEL_PROVIDER`（默认 `apipool`）
+- `MANIMIND_MODEL_REASONING_EFFORT`（如 `xhigh`）
+- `MANIMIND_MODEL_SUPPORTS_REASONING_SUMMARIES`（`true/false`）
+- `MANIMIND_DISABLE_RESPONSE_STORAGE`（`true/false`）
+- `MANIMIND_FAST_MODEL`（失败回退模型，默认 `deepseekv4flash`）
+- `MANIMIND_FAST_API_KEY`（回退模型 key）
+- `MANIMIND_FAST_MODEL_BASE_URL`（回退模型独立 base URL；例如 DeepSeek 官方可设为 `https://api.deepseek.com`）
+
+说明：
+
+- `deepseekv4flash` 会自动规范化为 `deepseek-v4-flash`。
 
 ## Web API 骨架（新增）
 

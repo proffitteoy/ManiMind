@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from .artifact_store import has_output_key, output_path_for_key, write_output_key
@@ -84,6 +86,173 @@ def _read_narration_script(plan: ProjectPlan, session_id: str) -> str:
     return "\n".join(lines)
 
 
+def _resolve_ffmpeg_path() -> str | None:
+    from shutil import which
+
+    direct = which("ffmpeg")
+    if direct:
+        return direct
+    configured = os.environ.get("MANIMIND_FFMPEG_PATH")
+    if configured and Path(configured).exists():
+        return configured
+    candidates = [
+        r"D:\ffmpeg\bin\ffmpeg.exe",
+        str(
+            Path.home()
+            / "scoop"
+            / "apps"
+            / "ffmpeg"
+            / "current"
+            / "bin"
+            / "ffmpeg.exe"
+        ),
+    ]
+    for item in candidates:
+        if Path(item).exists():
+            return item
+    return None
+
+
+def _collect_segment_videos(approved_records: list[dict[str, Any]]) -> list[str]:
+    videos: list[str] = []
+    for record in approved_records:
+        files = record.get("artifact_files")
+        if not isinstance(files, list):
+            continue
+        for item in files:
+            if not isinstance(item, str):
+                continue
+            if item.lower().endswith(".mp4") and Path(item).exists():
+                videos.append(item)
+    return videos
+
+
+def _is_real_wav(path: str | None) -> bool:
+    if not path:
+        return False
+    target = Path(path)
+    if not target.exists() or target.suffix.lower() != ".wav":
+        return False
+    try:
+        header = target.read_bytes()[:4]
+    except OSError:
+        return False
+    return header == b"RIFF"
+
+
+def _build_final_video(
+    *,
+    output_dir: Path,
+    approved_records: list[dict[str, Any]],
+    tts_output: str | None,
+) -> tuple[str | None, str | None]:
+    ffmpeg = _resolve_ffmpeg_path()
+    if not ffmpeg:
+        return None, "ffmpeg_not_found"
+
+    segment_videos = _collect_segment_videos(approved_records)
+    if not segment_videos:
+        return None, "no_segment_mp4_found"
+
+    video_dir = output_dir / "video"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    concat_file = video_dir / "concat-list.txt"
+    concat_file.write_text(
+        "\n".join(
+            [
+                f"file '{item.replace('\\', '/')}'"
+                for item in segment_videos
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    merged_video = video_dir / "segments-merged.mp4"
+    merge_cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_file),
+        "-c",
+        "copy",
+        str(merged_video),
+    ]
+    merge_proc = subprocess.run(
+        merge_cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if merge_proc.returncode != 0:
+        # copy codec 合并失败时回退到重编码，保证可以出片
+        merge_cmd = [
+            ffmpeg,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            str(merged_video),
+        ]
+        merge_proc = subprocess.run(
+            merge_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if merge_proc.returncode != 0:
+            return None, (
+                "ffmpeg_merge_failed:"
+                + (merge_proc.stderr.strip() or merge_proc.stdout.strip() or "unknown")
+            )
+
+    if _is_real_wav(tts_output):
+        final_video = video_dir / "final-with-audio.mp4"
+        mux_cmd = [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(merged_video),
+            "-i",
+            str(tts_output),
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(final_video),
+        ]
+        mux_proc = subprocess.run(
+            mux_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if mux_proc.returncode == 0:
+            return str(final_video), None
+        return str(merged_video), (
+            "ffmpeg_audio_mux_failed:"
+            + (mux_proc.stderr.strip() or mux_proc.stdout.strip() or "unknown")
+        )
+
+    return str(merged_video), None
+
+
 def finalize_delivery(
     plan: ProjectPlan,
     session_id: str,
@@ -130,6 +299,12 @@ def finalize_delivery(
         except Exception as exc:
             tts_error = str(exc)
 
+    final_video, final_video_error = _build_final_video(
+        output_dir=Path(plan.runtime_layout.output_dir),
+        approved_records=approved_records,
+        tts_output=tts_output,
+    )
+
     manifest_path = write_output_key(
         plan=plan,
         session_id=session_id,
@@ -140,9 +315,12 @@ def finalize_delivery(
             "approved_records": approved_records,
             "tts_output": tts_output,
             "tts_error": tts_error,
+            "final_video": final_video,
+            "final_video_error": final_video_error,
             "summary": {
                 "approved_count": len(approved_records),
                 "has_audio": tts_output is not None,
+                "has_final_video": final_video is not None,
             },
         },
     )
@@ -184,5 +362,7 @@ def finalize_delivery(
         "asset_manifest": str(manifest_path),
         "tts_output": tts_output,
         "tts_error": tts_error,
+        "final_video": final_video,
+        "final_video_error": final_video_error,
         "current_stage": plan.current_stage.value,
     }

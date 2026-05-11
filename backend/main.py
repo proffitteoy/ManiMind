@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .api.contexts import router as contexts_router
 from .api.events import router as events_router
@@ -28,6 +31,11 @@ def create_app() -> FastAPI:
     app.include_router(events_router, prefix="/api/projects", tags=["events"])
     app.include_router(execution_router, prefix="/api/projects", tags=["execution"])
     app.include_router(reviews_router, prefix="/api/projects", tags=["reviews"])
+
+    outputs_dir = Path.cwd() / "outputs"
+    if outputs_dir.exists():
+        app.mount("/outputs", StaticFiles(directory=str(outputs_dir), html=True), name="outputs")
+
     return app
 
 

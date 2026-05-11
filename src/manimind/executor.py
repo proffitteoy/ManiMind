@@ -9,6 +9,11 @@ from typing import Any
 
 from .artifact_store import has_output_key, write_output_key
 from .ingest import concatenate_documents, load_source_documents
+from .llm_client import (
+    LLMRequestError,
+    generate_json_with_fallback,
+    load_llm_runtime_config,
+)
 from .models import EventType, ExecutionTask, PipelineStage, ProjectPlan, TaskStatus
 from .runtime_store import (
     load_execution_task_snapshot,
@@ -123,6 +128,240 @@ def _build_planner_brief(
     }
 
 
+def _coerce_str_list(value: Any, *, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if not stripped:
+            continue
+        output.append(stripped)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _default_storyboard_outline(plan: ProjectPlan) -> list[dict[str, Any]]:
+    return [
+        {
+            "segment_id": segment.id,
+            "title": segment.title,
+            "goal": segment.goal,
+            "narration": segment.narration,
+            "modality": segment.modality.value,
+            "formulas": segment.formulas,
+            "html_motion_notes": segment.html_motion_notes,
+        }
+        for segment in plan.segments
+    ]
+
+
+def _normalize_storyboard_outline(
+    plan: ProjectPlan,
+    candidate_outline: Any,
+) -> list[dict[str, Any]]:
+    candidate_map: dict[str, dict[str, Any]] = {}
+    if isinstance(candidate_outline, list):
+        for item in candidate_outline:
+            if not isinstance(item, dict):
+                continue
+            segment_id = item.get("segment_id")
+            if isinstance(segment_id, str) and segment_id.strip():
+                candidate_map[segment_id.strip()] = item
+
+    merged: list[dict[str, Any]] = []
+    for segment in plan.segments:
+        item = candidate_map.get(segment.id, {})
+        if not isinstance(item, dict):
+            item = {}
+
+        narration = item.get("narration")
+        if isinstance(narration, str) and narration.strip():
+            segment.narration = narration.strip()
+
+        formulas = _coerce_str_list(item.get("formulas"), limit=8)
+        if formulas:
+            segment.formulas = formulas
+
+        motion_notes = _coerce_str_list(item.get("html_motion_notes"), limit=8)
+        if motion_notes:
+            segment.html_motion_notes = motion_notes
+
+        merged.append(
+            {
+                "segment_id": segment.id,
+                "title": segment.title,
+                "goal": segment.goal,
+                "narration": segment.narration,
+                "modality": segment.modality.value,
+                "formulas": segment.formulas,
+                "html_motion_notes": segment.html_motion_notes,
+            }
+        )
+    return merged
+
+
+def _generate_main_outputs_with_llm(
+    *,
+    plan: ProjectPlan,
+    source_text: str,
+    fallback_formulas: list[str],
+    fallback_glossary: list[str],
+    fallback_planner_brief: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    cfg = load_llm_runtime_config()
+    source_excerpt = source_text[:16000] if source_text else ""
+    payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "audience": plan.source_bundle.audience,
+        "style_refs": plan.source_bundle.style_refs,
+        "segments": [
+            {
+                "segment_id": segment.id,
+                "title": segment.title,
+                "goal": segment.goal,
+                "narration": segment.narration,
+                "modality": segment.modality.value,
+                "formulas": segment.formulas,
+                "html_motion_notes": segment.html_motion_notes,
+                "estimated_seconds": segment.estimated_seconds,
+            }
+            for segment in plan.segments
+        ],
+        "fallback_formulas": fallback_formulas[:12],
+        "fallback_glossary": fallback_glossary[:8],
+        "source_excerpt": source_excerpt,
+    }
+    instructions = (
+        "你是数学科普视频总编导。"
+        "请只输出一个 JSON 对象，不要输出 Markdown。"
+        "内容必须忠于输入，术语统一，可直接用于动画制作。"
+    )
+    prompt = (
+        "请基于输入材料生成可执行编排内容，输出 JSON schema：\n"
+        "{\n"
+        '  "research_summary": "string",\n'
+        '  "glossary_terms": ["string"],\n'
+        '  "formula_candidates": ["string"],\n'
+        '  "planner_brief": {\n'
+        '    "segment_priorities": [{"segment_id":"string","objective":"string","primary_worker_path":"string","estimated_seconds":20}],\n'
+        '    "glossary_terms": ["string"],\n'
+        '    "must_checks": ["string"],\n'
+        '    "risk_flags": ["string"]\n'
+        "  },\n"
+        '  "storyboard_outline": [\n'
+        '    {"segment_id":"string","narration":"string","formulas":["string"],"html_motion_notes":["string"]}\n'
+        "  ]\n"
+        "}\n\n"
+        "输入：\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    generated, meta = generate_json_with_fallback(
+        cfg=cfg,
+        instructions=instructions,
+        prompt=prompt,
+        request_kind="main",
+    )
+    research_summary = generated.get("research_summary")
+    if not isinstance(research_summary, str) or not research_summary.strip():
+        research_summary = source_excerpt or "no source text loaded"
+
+    glossary_terms = _coerce_str_list(generated.get("glossary_terms"), limit=8)
+    if not glossary_terms:
+        glossary_terms = fallback_glossary[:8]
+
+    formula_candidates = _coerce_str_list(generated.get("formula_candidates"), limit=12)
+    if not formula_candidates:
+        formula_candidates = fallback_formulas[:12]
+
+    planner_brief = generated.get("planner_brief")
+    if not isinstance(planner_brief, dict):
+        planner_brief = fallback_planner_brief
+    else:
+        planner_brief = {
+            "segment_priorities": planner_brief.get(
+                "segment_priorities",
+                fallback_planner_brief.get("segment_priorities", []),
+            ),
+            "glossary_terms": _coerce_str_list(
+                planner_brief.get("glossary_terms"), limit=8
+            )
+            or fallback_planner_brief.get("glossary_terms", []),
+            "must_checks": _coerce_str_list(planner_brief.get("must_checks"), limit=8)
+            or fallback_planner_brief.get("must_checks", []),
+            "risk_flags": _coerce_str_list(planner_brief.get("risk_flags"), limit=8),
+        }
+
+    storyboard_outline = _normalize_storyboard_outline(
+        plan,
+        generated.get("storyboard_outline"),
+    )
+    return (
+        {
+            "research_summary": research_summary.strip(),
+            "glossary_terms": glossary_terms,
+            "formula_candidates": formula_candidates,
+            "planner_brief": planner_brief,
+            "storyboard_outline": storyboard_outline,
+        },
+        meta,
+    )
+
+
+def _generate_review_draft_with_llm(
+    *,
+    plan: ProjectPlan,
+    render_evidence: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    cfg = load_llm_runtime_config()
+    payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "review_checkpoints": [item.to_dict() for item in plan.review_checkpoints],
+        "render_evidence": render_evidence,
+    }
+    instructions = (
+        "你是审核 Agent。"
+        "你只能输出审核草案，不能直接 approve。"
+        "请输出 JSON 对象，不要输出 Markdown。"
+    )
+    prompt = (
+        "请输出 JSON schema：\n"
+        "{\n"
+        '  "summary": "string",\n'
+        '  "decision": "pending_human_confirmation",\n'
+        '  "risk_notes": ["string"],\n'
+        '  "must_check": ["string"]\n'
+        "}\n\n"
+        "输入：\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    generated, meta = generate_json_with_fallback(
+        cfg=cfg,
+        instructions=instructions,
+        prompt=prompt,
+        request_kind="review",
+    )
+    summary = generated.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        summary = "AI reviewer draft generated. Awaiting human approval."
+    risk_notes = _coerce_str_list(generated.get("risk_notes"), limit=8)
+    must_check = _coerce_str_list(generated.get("must_check"), limit=8)
+    return (
+        {
+            "summary": summary.strip(),
+            "decision": "pending_human_confirmation",
+            "risk_notes": risk_notes,
+            "must_check": must_check,
+        },
+        meta,
+    )
+
+
 def _task_by_id(plan: ProjectPlan, task_id: str) -> ExecutionTask:
     for task in plan.execution_tasks:
         if task.id == task_id:
@@ -233,6 +472,9 @@ def run_to_review(
     source_text = concatenate_documents(docs)
     formulas = _extract_formulas(source_text)
     glossary = _extract_glossary(source_text)
+    research_summary = source_text[:4800] if source_text else "no source text loaded"
+    llm_main_meta: dict[str, Any] | None = None
+    llm_main_error: str | None = None
 
     _write_required_outputs(
         plan,
@@ -254,6 +496,29 @@ def run_to_review(
         formulas=formulas,
         docs=docs,
     )
+    fallback_planner_brief = _build_planner_brief(
+        plan=plan,
+        glossary=glossary,
+        explorer_findings=explorer_findings,
+    )
+    planner_brief = fallback_planner_brief
+    storyboard_outline = _default_storyboard_outline(plan)
+    try:
+        llm_main_outputs, llm_main_meta = _generate_main_outputs_with_llm(
+            plan=plan,
+            source_text=source_text,
+            fallback_formulas=formulas,
+            fallback_glossary=glossary,
+            fallback_planner_brief=fallback_planner_brief,
+        )
+        research_summary = llm_main_outputs["research_summary"]
+        glossary = llm_main_outputs["glossary_terms"]
+        formulas = llm_main_outputs["formula_candidates"]
+        planner_brief = llm_main_outputs["planner_brief"]
+        storyboard_outline = llm_main_outputs["storyboard_outline"]
+    except (LLMRequestError, ValueError, TypeError, KeyError) as exc:
+        llm_main_error = str(exc)
+
     persist_agent_message(
         plan=plan,
         session_id=session_id,
@@ -282,20 +547,18 @@ def run_to_review(
         session_id,
         "summarize.research",
         {
-            "summary": source_text[:4800] if source_text else "no source text loaded",
+            "summary": research_summary,
             "glossary": glossary,
             "formulas": formulas,
             "source_documents": [item.to_dict() for item in docs],
             "explorer_findings": explorer_findings,
+            "llm_generation": {
+                "meta": llm_main_meta,
+                "error": llm_main_error,
+            },
         },
     )
     _complete_task(plan, session_id, "summarize.research", "lead")
-
-    planner_brief = _build_planner_brief(
-        plan=plan,
-        glossary=glossary,
-        explorer_findings=explorer_findings,
-    )
     persist_agent_message(
         plan=plan,
         session_id=session_id,
@@ -316,20 +579,12 @@ def run_to_review(
         payload={
             "summary": "Planner brief prepared.",
             "brief": planner_brief,
+            "llm_generation": {
+                "meta": llm_main_meta,
+                "error": llm_main_error,
+            },
         },
     )
-
-    storyboard_outline = [
-        {
-            "segment_id": segment.id,
-            "title": segment.title,
-            "goal": segment.goal,
-            "narration": segment.narration,
-            "modality": segment.modality.value,
-            "formulas": segment.formulas,
-        }
-        for segment in plan.segments
-    ]
     _write_required_outputs(
         plan,
         session_id,
@@ -338,6 +593,10 @@ def run_to_review(
             "script_outline": storyboard_outline,
             "style": plan.source_bundle.style_refs,
             "planner_brief": planner_brief,
+            "llm_generation": {
+                "meta": llm_main_meta,
+                "error": llm_main_error,
+            },
         },
     )
     _complete_task(plan, session_id, "plan.storyboard", "coordinator")
@@ -428,12 +687,28 @@ def run_to_review(
         },
     )
 
-    draft_payload = {
+    draft_payload: dict[str, Any] = {
         "summary": "AI reviewer draft generated. Awaiting human approval.",
         "decision": "pending_human_confirmation",
+        "risk_notes": [],
+        "must_check": [],
         "checkpoints": [item.to_dict() for item in plan.review_checkpoints],
         "evidence_path": str(review_evidence_path),
+        "llm_generation": {"meta": None, "error": None},
     }
+    try:
+        review_draft, review_meta = _generate_review_draft_with_llm(
+            plan=plan,
+            render_evidence=render_evidence,
+        )
+        draft_payload["summary"] = review_draft["summary"]
+        draft_payload["decision"] = review_draft["decision"]
+        draft_payload["risk_notes"] = review_draft["risk_notes"]
+        draft_payload["must_check"] = review_draft["must_check"]
+        draft_payload["llm_generation"] = {"meta": review_meta, "error": None}
+    except (LLMRequestError, ValueError, TypeError, KeyError) as exc:
+        draft_payload["llm_generation"] = {"meta": None, "error": str(exc)}
+
     persist_agent_message(
         plan=plan,
         session_id=session_id,
