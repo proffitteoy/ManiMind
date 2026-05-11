@@ -8,13 +8,34 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from manimind.models import SegmentModality, SegmentSpec, SourceBundle
+from manimind.models import InputDocRole, InputDocument, SegmentModality, SegmentSpec, SourceBundle
 from manimind.workflow import build_project_plan
+
+
+def _parse_source_bundle(raw: dict[str, Any]) -> SourceBundle:
+    documents: list[InputDocument] = []
+    for doc in raw.get("documents", []):
+        documents.append(
+            InputDocument(
+                path=doc["path"],
+                role=InputDocRole(doc.get("role", "raw_material")),
+                title=doc.get("title", ""),
+                consumer_roles=doc.get("consumer_roles", []),
+                notes=doc.get("notes", ""),
+            )
+        )
+    return SourceBundle(
+        paper_path=raw.get("paper_path", ""),
+        note_paths=raw.get("note_paths", []),
+        audience=raw.get("audience", "大众观众"),
+        style_refs=raw.get("style_refs", []),
+        documents=documents,
+    )
 
 
 def build_plan_from_manifest_payload(payload: dict[str, Any]):
     try:
-        source_bundle = SourceBundle(**payload["source_bundle"])
+        source_bundle = _parse_source_bundle(payload["source_bundle"])
         segments = [
             SegmentSpec(
                 id=item["id"],

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any
 
 from .artifact_store import has_output_key, output_path_for_key, write_output_key
@@ -37,6 +39,18 @@ def _persist_mutation(plan: ProjectPlan, session_id: str, result) -> None:
     )
 
 
+def _log_finalize(session_id: str, step: str, message: str) -> None:
+    raw = os.environ.get("MANIMIND_PROGRESS_LOG", "1").strip().lower()
+    if raw in {"0", "false", "off", "no"}:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(
+        f"[manimind][{stamp}][session={session_id}][finalize-{step}] {message}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _collect_approved_records(plan: ProjectPlan) -> list[dict[str, Any]]:
     root = Path(plan.runtime_layout.output_dir) / "artifacts"
     if not root.exists():
@@ -62,24 +76,27 @@ def _collect_approved_records(plan: ProjectPlan) -> list[dict[str, Any]]:
     return records
 
 
-def _read_narration_script(plan: ProjectPlan, session_id: str) -> str:
+def _load_script_outline(plan: ProjectPlan, session_id: str) -> list[dict[str, Any]]:
     script_key = f"{plan.project_id}.narration.script"
     script_path = output_path_for_key(plan, session_id, script_key)
     if not script_path.exists():
-        return ""
+        return []
     try:
         payload = json.loads(script_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return ""
+        return []
     if not isinstance(payload, dict):
-        return ""
+        return []
     outline = payload.get("script_outline")
     if not isinstance(outline, list):
-        return ""
+        return []
+    return [item for item in outline if isinstance(item, dict)]
+
+
+def _read_narration_script(plan: ProjectPlan, session_id: str) -> str:
+    outline = _load_script_outline(plan, session_id)
     lines: list[str] = []
     for item in outline:
-        if not isinstance(item, dict):
-            continue
         narration = item.get("narration")
         if isinstance(narration, str) and narration.strip():
             lines.append(narration.strip())
@@ -113,18 +130,79 @@ def _resolve_ffmpeg_path() -> str | None:
     return None
 
 
-def _collect_segment_videos(approved_records: list[dict[str, Any]]) -> list[str]:
-    videos: list[str] = []
+def _collect_segment_videos(
+    plan: ProjectPlan,
+    approved_records: list[dict[str, Any]],
+) -> list[str]:
+    ordered_videos: list[str] = []
+    record_by_key: dict[str, dict[str, Any]] = {}
+    for record in approved_records:
+        output_key = record.get("output_key")
+        if isinstance(output_key, str):
+            record_by_key[output_key] = record
+
+    for segment in plan.segments:
+        output_key = f"{plan.project_id}.manim.{segment.id}.approved"
+        record = record_by_key.get(output_key)
+        if not isinstance(record, dict):
+            continue
+        files = record.get("artifact_files")
+        if not isinstance(files, list):
+            continue
+        for item in files:
+            if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
+                ordered_videos.append(item)
+
+    if ordered_videos:
+        return ordered_videos
+
+    fallback_videos: list[str] = []
     for record in approved_records:
         files = record.get("artifact_files")
         if not isinstance(files, list):
             continue
         for item in files:
-            if not isinstance(item, str):
-                continue
-            if item.lower().endswith(".mp4") and Path(item).exists():
-                videos.append(item)
-    return videos
+            if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
+                fallback_videos.append(item)
+    return fallback_videos
+
+
+def _format_srt_time(seconds: int) -> str:
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},000"
+
+
+def _write_subtitle_file(
+    *,
+    output_dir: Path,
+    outline: list[dict[str, Any]],
+) -> str | None:
+    entries: list[str] = []
+    cursor = 0
+    index = 1
+    for item in outline:
+        narration = item.get("narration")
+        if not isinstance(narration, str) or not narration.strip():
+            continue
+        duration = item.get("estimated_seconds")
+        if not isinstance(duration, int) or duration <= 0:
+            duration = 20
+        start = _format_srt_time(cursor)
+        cursor += duration
+        end = _format_srt_time(cursor)
+        entries.append(f"{index}\n{start} --> {end}\n{narration.strip()}\n")
+        index += 1
+
+    if not entries:
+        return None
+
+    subtitle_dir = output_dir / "subtitles"
+    subtitle_dir.mkdir(parents=True, exist_ok=True)
+    subtitle_path = subtitle_dir / "narration.srt"
+    subtitle_path.write_text("\n".join(entries), encoding="utf-8")
+    return str(subtitle_path)
 
 
 def _is_real_wav(path: str | None) -> bool:
@@ -142,6 +220,7 @@ def _is_real_wav(path: str | None) -> bool:
 
 def _build_final_video(
     *,
+    plan: ProjectPlan,
     output_dir: Path,
     approved_records: list[dict[str, Any]],
     tts_output: str | None,
@@ -150,7 +229,7 @@ def _build_final_video(
     if not ffmpeg:
         return None, "ffmpeg_not_found"
 
-    segment_videos = _collect_segment_videos(approved_records)
+    segment_videos = _collect_segment_videos(plan, approved_records)
     if not segment_videos:
         return None, "no_segment_mp4_found"
 
@@ -260,13 +339,20 @@ def finalize_delivery(
     tts_provider: str = "powershell_sapi",
 ) -> dict[str, Any]:
     """在审核通过后执行 post_produce 与 package。"""
+    _log_finalize(
+        session_id,
+        "start",
+        f"project={plan.project_id} tts_provider={tts_provider}",
+    )
     load_execution_task_snapshot(plan)
     review_task = _task_by_id(plan, "review.outputs")
     if review_task.status != TaskStatus.COMPLETED:
+        _log_finalize(session_id, "start", "blocked: review_not_completed")
         raise RuntimeError("review_not_completed")
 
     post_task = _task_by_id(plan, "post_produce.outputs")
     if post_task.status != TaskStatus.COMPLETED:
+        _log_finalize(session_id, "post", "mark post_produce.outputs in_progress")
         post_result = update_execution_task_status(
             plan=plan,
             task_id=post_task.id,
@@ -278,7 +364,26 @@ def finalize_delivery(
             raise RuntimeError(f"post_produce_start_failed:{post_result.reason}")
 
     approved_records = _collect_approved_records(plan)
+    script_outline = _load_script_outline(plan, session_id)
     narration_text = _read_narration_script(plan, session_id)
+    _log_finalize(
+        session_id,
+        "collect",
+        (
+            "approved_records="
+            f"{len(approved_records)} script_segments={len(script_outline)} "
+            f"narration_chars={len(narration_text)}"
+        ),
+    )
+    subtitle_path = _write_subtitle_file(
+        output_dir=Path(plan.runtime_layout.output_dir),
+        outline=script_outline,
+    )
+    _log_finalize(
+        session_id,
+        "subtitle",
+        f"subtitle_file={subtitle_path or 'none'}",
+    )
     tts_output: str | None = None
     tts_error: str | None = None
     if narration_text.strip():
@@ -286,6 +391,7 @@ def finalize_delivery(
         audio_dir.mkdir(parents=True, exist_ok=True)
         target_audio = audio_dir / "narration.wav"
         try:
+            _log_finalize(session_id, "tts", "synthesize narration start")
             adapter = build_tts_adapter(tts_provider)
             tts_output = adapter.synthesize(
                 TTSJob(
@@ -296,13 +402,33 @@ def finalize_delivery(
                     language="zh-CN",
                 )
             )
+            _log_finalize(
+                session_id,
+                "tts",
+                f"synthesize done output={tts_output}",
+            )
         except Exception as exc:
             tts_error = str(exc)
+            _log_finalize(
+                session_id,
+                "tts",
+                f"synthesize failed error={tts_error}",
+            )
 
+    _log_finalize(session_id, "video", "building final video")
     final_video, final_video_error = _build_final_video(
+        plan=plan,
         output_dir=Path(plan.runtime_layout.output_dir),
         approved_records=approved_records,
         tts_output=tts_output,
+    )
+    _log_finalize(
+        session_id,
+        "video",
+        (
+            "final_video="
+            f"{final_video or 'none'} final_video_error={final_video_error or 'none'}"
+        ),
     )
 
     manifest_path = write_output_key(
@@ -315,15 +441,18 @@ def finalize_delivery(
             "approved_records": approved_records,
             "tts_output": tts_output,
             "tts_error": tts_error,
+            "subtitle_file": subtitle_path,
             "final_video": final_video,
             "final_video_error": final_video_error,
             "summary": {
                 "approved_count": len(approved_records),
                 "has_audio": tts_output is not None,
+                "has_subtitles": subtitle_path is not None,
                 "has_final_video": final_video is not None,
             },
         },
     )
+    _log_finalize(session_id, "manifest", f"asset_manifest={manifest_path}")
 
     post_complete = update_execution_task_status(
         plan=plan,
@@ -335,6 +464,7 @@ def finalize_delivery(
     _persist_mutation(plan, session_id, post_complete)
     if not post_complete.success:
         raise RuntimeError(f"post_produce_complete_failed:{post_complete.reason}")
+    _log_finalize(session_id, "post", "post_produce.outputs completed")
 
     package_start = update_execution_task_status(
         plan=plan,
@@ -345,6 +475,7 @@ def finalize_delivery(
     _persist_mutation(plan, session_id, package_start)
     if not package_start.success:
         raise RuntimeError(f"package_start_failed:{package_start.reason}")
+    _log_finalize(session_id, "package", "package.delivery in_progress")
 
     package_complete = update_execution_task_status(
         plan=plan,
@@ -356,12 +487,15 @@ def finalize_delivery(
     _persist_mutation(plan, session_id, package_complete)
     if not package_complete.success:
         raise RuntimeError(f"package_complete_failed:{package_complete.reason}")
+    _log_finalize(session_id, "package", "package.delivery completed")
 
+    _log_finalize(session_id, "done", "finalize completed")
     return {
         "project_id": plan.project_id,
         "asset_manifest": str(manifest_path),
         "tts_output": tts_output,
         "tts_error": tts_error,
+        "subtitle_file": subtitle_path,
         "final_video": final_video,
         "final_video_error": final_video_error,
         "current_stage": plan.current_stage.value,

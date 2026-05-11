@@ -1,10 +1,13 @@
-"""LLM 调用层：优先 Responses API，失败时回退到 Chat Completions。"""
+"""LLM 调用层：按角色路由到主模型、审核模型或 worker 模型。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import http.client
 import json
 import os
+import socket
+import time
 from typing import Any
 from urllib import error, request
 
@@ -14,19 +17,38 @@ class LLMRequestError(RuntimeError):
 
 
 @dataclass(slots=True)
-class LLMRuntimeConfig:
+class LLMRouteConfig:
+    route_name: str
     provider_name: str
     base_url: str
+    wire_api: str
     model: str
-    review_model: str
-    fast_model: str
-    fast_base_url: str
-    model_reasoning_effort: str
-    model_supports_reasoning_summaries: bool
+    reasoning_effort: str | None
+    supports_reasoning_summaries: bool
     disable_response_storage: bool
     timeout_seconds: int
     api_key: str
-    fast_api_key: str | None
+
+
+@dataclass(slots=True)
+class LLMRuntimeConfig:
+    primary: LLMRouteConfig
+    review: LLMRouteConfig
+    worker: LLMRouteConfig
+
+    def route_for_role(self, role_id: str) -> LLMRouteConfig:
+        if role_id == "reviewer":
+            return self.review
+        if role_id in {
+            "explorer",
+            "planner",
+            "coordinator",
+            "html_worker",
+            "manim_worker",
+            "svg_worker",
+        }:
+            return self.worker
+        return self.primary
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -57,33 +79,54 @@ def _canonicalize_model_name(model: str) -> str:
     return normalized
 
 
+def _normalize_wire_api(value: str | None) -> str:
+    normalized = (value or "responses").strip().lower().replace("-", "_")
+    if normalized in {"responses", "chat_completions"}:
+        return normalized
+    raise LLMRequestError(f"unsupported_wire_api:{value}")
+
+
+def _read_timeout(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        return max(30, int(raw))
+    except ValueError:
+        return default
+
+
+def _require_secret(value: str | None, name: str) -> str:
+    secret = (value or "").strip()
+    if not secret:
+        raise LLMRequestError(f"missing_{name}")
+    return secret
+
+
 def load_llm_runtime_config() -> LLMRuntimeConfig:
-    base_url = os.environ.get("MANIMIND_MODEL_BASE_URL") or os.environ.get(
-        "MODEL_BASE_URL"
-    ) or "https://api.apipool.dev"
-    provider_name = os.environ.get("MANIMIND_MODEL_PROVIDER") or os.environ.get(
-        "model_provider"
-    ) or "apipool"
-    model = os.environ.get("MANIMIND_MODEL") or os.environ.get("model") or "gpt-5.5"
-    model = _canonicalize_model_name(model)
-    review_model = (
-        os.environ.get("MANIMIND_REVIEW_MODEL")
-        or os.environ.get("review_model")
-        or model
+    primary_base_url = (
+        os.environ.get("MANIMIND_MODEL_BASE_URL")
+        or os.environ.get("MODEL_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or "https://api.apipool.dev"
     )
-    review_model = _canonicalize_model_name(review_model)
-    fast_model = _canonicalize_model_name(
-        os.environ.get("MANIMIND_FAST_MODEL") or "deepseekv4flash"
+    primary_provider = (
+        os.environ.get("MANIMIND_MODEL_PROVIDER")
+        or os.environ.get("model_provider")
+        or "apipool"
     )
-    fast_base_url = os.environ.get("MANIMIND_FAST_MODEL_BASE_URL") or os.environ.get(
-        "DEEPSEEK_BASE_URL"
-    ) or base_url
-    effort = (
+    primary_model = _canonicalize_model_name(
+        os.environ.get("MANIMIND_MODEL") or os.environ.get("model") or "gpt-5.5"
+    )
+    primary_wire_api = _normalize_wire_api(
+        os.environ.get("MANIMIND_MODEL_WIRE_API")
+        or os.environ.get("MANIMIND_WIRE_API")
+        or "responses"
+    )
+    primary_effort = (
         os.environ.get("MANIMIND_MODEL_REASONING_EFFORT")
         or os.environ.get("model_reasoning_effort")
         or "medium"
     )
-    supports_reasoning_summaries = _parse_bool(
+    primary_supports_summary = _parse_bool(
         os.environ.get("MANIMIND_MODEL_SUPPORTS_REASONING_SUMMARIES")
         or os.environ.get("model_supports_reasoning_summaries"),
         default=False,
@@ -93,33 +136,85 @@ def load_llm_runtime_config() -> LLMRuntimeConfig:
         or os.environ.get("disable_response_storage"),
         default=True,
     )
-    timeout_seconds_raw = os.environ.get("MANIMIND_LLM_TIMEOUT_SECONDS", "240")
-    try:
-        timeout_seconds = max(30, int(timeout_seconds_raw))
-    except ValueError:
-        timeout_seconds = 240
+    primary_timeout = _read_timeout("MANIMIND_LLM_TIMEOUT_SECONDS", 240)
+    primary_api_key = _require_secret(os.environ.get("OPENAI_API_KEY"), "OPENAI_API_KEY")
 
-    api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
-    fast_api_key = (
-        os.environ.get("MANIMIND_FAST_API_KEY")
-        or os.environ.get("DEEPSEEK_API_KEY")
-        or ""
-    ).strip() or None
-    if not api_key:
-        raise LLMRequestError("missing_OPENAI_API_KEY")
+    review_model = _canonicalize_model_name(
+        os.environ.get("MANIMIND_REVIEW_MODEL") or primary_model
+    )
+    review_wire_api = _normalize_wire_api(
+        os.environ.get("MANIMIND_REVIEW_MODEL_WIRE_API") or primary_wire_api
+    )
+    review_base_url = (
+        os.environ.get("MANIMIND_REVIEW_MODEL_BASE_URL") or primary_base_url
+    )
+    review_api_key = os.environ.get("MANIMIND_REVIEW_API_KEY") or primary_api_key
+    review_effort = os.environ.get("MANIMIND_REVIEW_MODEL_REASONING_EFFORT") or primary_effort
+    review_supports_summary = _parse_bool(
+        os.environ.get("MANIMIND_REVIEW_MODEL_SUPPORTS_REASONING_SUMMARIES"),
+        default=primary_supports_summary,
+    )
+    review_timeout = _read_timeout("MANIMIND_REVIEW_LLM_TIMEOUT_SECONDS", primary_timeout)
+
+    worker_model = _canonicalize_model_name(
+        os.environ.get("MANIMIND_WORKER_MODEL") or "deepseek-v4-flash"
+    )
+    worker_wire_api = _normalize_wire_api(
+        os.environ.get("MANIMIND_WORKER_MODEL_WIRE_API") or primary_wire_api
+    )
+    worker_provider = os.environ.get("MANIMIND_WORKER_MODEL_PROVIDER") or primary_provider
+    worker_base_url = (
+        os.environ.get("MANIMIND_WORKER_MODEL_BASE_URL")
+        or primary_base_url
+    )
+    worker_api_key = _require_secret(
+        os.environ.get("MANIMIND_WORKER_API_KEY"),
+        "MANIMIND_WORKER_API_KEY",
+    )
+    worker_effort = os.environ.get("MANIMIND_WORKER_MODEL_REASONING_EFFORT") or "medium"
+    worker_supports_summary = _parse_bool(
+        os.environ.get("MANIMIND_WORKER_MODEL_SUPPORTS_REASONING_SUMMARIES"),
+        default=False,
+    )
+    worker_timeout = _read_timeout("MANIMIND_WORKER_LLM_TIMEOUT_SECONDS", primary_timeout)
+
     return LLMRuntimeConfig(
-        provider_name=provider_name,
-        base_url=_normalize_base_url(base_url),
-        model=model,
-        review_model=review_model,
-        fast_model=fast_model,
-        fast_base_url=_normalize_base_url(fast_base_url),
-        model_reasoning_effort=effort,
-        model_supports_reasoning_summaries=supports_reasoning_summaries,
-        disable_response_storage=disable_storage,
-        timeout_seconds=timeout_seconds,
-        api_key=api_key,
-        fast_api_key=fast_api_key,
+        primary=LLMRouteConfig(
+            route_name="primary",
+            provider_name=primary_provider,
+            base_url=_normalize_base_url(primary_base_url),
+            wire_api=primary_wire_api,
+            model=primary_model,
+            reasoning_effort=primary_effort,
+            supports_reasoning_summaries=primary_supports_summary,
+            disable_response_storage=disable_storage,
+            timeout_seconds=primary_timeout,
+            api_key=primary_api_key,
+        ),
+        review=LLMRouteConfig(
+            route_name="review",
+            provider_name=primary_provider,
+            base_url=_normalize_base_url(review_base_url),
+            wire_api=review_wire_api,
+            model=review_model,
+            reasoning_effort=review_effort,
+            supports_reasoning_summaries=review_supports_summary,
+            disable_response_storage=disable_storage,
+            timeout_seconds=review_timeout,
+            api_key=_require_secret(review_api_key, "MANIMIND_REVIEW_API_KEY"),
+        ),
+        worker=LLMRouteConfig(
+            route_name="worker",
+            provider_name=worker_provider,
+            base_url=_normalize_base_url(worker_base_url),
+            wire_api=worker_wire_api,
+            model=worker_model,
+            reasoning_effort=worker_effort,
+            supports_reasoning_summaries=worker_supports_summary,
+            disable_response_storage=disable_storage,
+            timeout_seconds=worker_timeout,
+            api_key=worker_api_key,
+        ),
     )
 
 
@@ -164,21 +259,53 @@ def _post_json(
             "Content-Type": "application/json",
         },
     )
+    retries_raw = os.environ.get("MANIMIND_LLM_RETRY_COUNT", "3").strip()
     try:
-        with request.urlopen(req, timeout=timeout_seconds) as resp:
-            content = resp.read().decode("utf-8", errors="replace")
-    except error.HTTPError as exc:
-        content = exc.read().decode("utf-8", errors="replace")
-        raise LLMRequestError(f"http_{exc.code}:{content[:600]}") from exc
-    except error.URLError as exc:
-        raise LLMRequestError(f"url_error:{exc.reason}") from exc
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise LLMRequestError(f"invalid_json_response:{content[:600]}") from exc
-    if not isinstance(parsed, dict):
-        raise LLMRequestError("invalid_response_shape")
-    return parsed
+        retries = max(1, int(retries_raw))
+    except ValueError:
+        retries = 3
+
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            with request.urlopen(req, timeout=timeout_seconds) as resp:
+                content = resp.read().decode("utf-8", errors="replace")
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise LLMRequestError(f"invalid_json_response:{content[:600]}") from exc
+            if not isinstance(parsed, dict):
+                raise LLMRequestError("invalid_response_shape")
+            return parsed
+        except error.HTTPError as exc:
+            content = exc.read().decode("utf-8", errors="replace")
+            last_error = LLMRequestError(f"http_{exc.code}:{content[:600]}")
+            if exc.code in {429, 500, 502, 503, 504} and attempt < retries:
+                time.sleep(min(8, 2 ** (attempt - 1)))
+                continue
+            raise last_error from exc
+        except error.URLError as exc:
+            last_error = LLMRequestError(f"url_error:{exc.reason}")
+            if attempt < retries:
+                time.sleep(min(8, 2 ** (attempt - 1)))
+                continue
+            raise last_error from exc
+        except (TimeoutError, socket.timeout) as exc:
+            last_error = LLMRequestError("timeout_error")
+            if attempt < retries:
+                time.sleep(min(8, 2 ** (attempt - 1)))
+                continue
+            raise last_error from exc
+        except (http.client.RemoteDisconnected, ConnectionResetError) as exc:
+            last_error = LLMRequestError("connection_reset")
+            if attempt < retries:
+                time.sleep(min(8, 2 ** (attempt - 1)))
+                continue
+            raise last_error from exc
+
+    if last_error is not None:
+        raise last_error
+    raise LLMRequestError("request_failed_without_error")
 
 
 def _extract_text_from_responses(resp: dict[str, Any]) -> str:
@@ -211,60 +338,33 @@ def _extract_text_from_responses(resp: dict[str, Any]) -> str:
 
 def _responses_request(
     *,
-    base_url: str,
-    cfg: LLMRuntimeConfig,
-    model: str,
-    api_key: str,
+    route: LLMRouteConfig,
     instructions: str,
     prompt: str,
-    reasoning_effort: str | None,
+    response_format: str | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": model,
+        "model": route.model,
         "instructions": instructions,
         "input": prompt,
-        "store": not cfg.disable_response_storage,
-        "text": {"format": {"type": "json_object"}},
+        "store": not route.disable_response_storage,
     }
-    if reasoning_effort:
-        reasoning: dict[str, Any] = {"effort": reasoning_effort}
-        if cfg.model_supports_reasoning_summaries:
+    if response_format == "json_object":
+        payload["text"] = {"format": {"type": "json_object"}}
+    if route.reasoning_effort:
+        reasoning: dict[str, Any] = {"effort": route.reasoning_effort}
+        if route.supports_reasoning_summaries:
             reasoning["summary"] = "auto"
         payload["reasoning"] = reasoning
     return _post_json(
-        url=f"{base_url}/responses",
-        api_key=api_key,
+        url=f"{route.base_url}/responses",
+        api_key=route.api_key,
         payload=payload,
-        timeout_seconds=cfg.timeout_seconds,
+        timeout_seconds=route.timeout_seconds,
     )
 
 
-def _chat_completions_request(
-    *,
-    base_url: str,
-    cfg: LLMRuntimeConfig,
-    model: str,
-    api_key: str,
-    instructions: str,
-    prompt: str,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": prompt},
-        ],
-        "response_format": {"type": "json_object"},
-    }
-    return _post_json(
-        url=f"{base_url}/chat/completions",
-        api_key=api_key,
-        payload=payload,
-        timeout_seconds=cfg.timeout_seconds,
-    )
-
-
-def _extract_text_from_chat(resp: dict[str, Any]) -> str:
+def _extract_text_from_chat_completions(resp: dict[str, Any]) -> str:
     choices = resp.get("choices")
     if not isinstance(choices, list) or not choices:
         return ""
@@ -277,66 +377,110 @@ def _extract_text_from_chat(resp: dict[str, Any]) -> str:
     content = message.get("content")
     if isinstance(content, str):
         return content.strip()
-    if isinstance(content, list):
-        chunks: list[str] = []
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            text = part.get("text")
-            if isinstance(text, str) and text.strip():
-                chunks.append(text.strip())
-        return "\n".join(chunks).strip()
-    return ""
+    if not isinstance(content, list):
+        return ""
+    chunks: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in {"text", "output_text"}:
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            chunks.append(text.strip())
+    return "\n".join(chunks).strip()
 
 
-def generate_json_with_fallback(
+def _chat_completions_request(
     *,
-    cfg: LLMRuntimeConfig,
+    route: LLMRouteConfig,
     instructions: str,
     prompt: str,
-    request_kind: str,
+    response_format: str | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": route.model,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    if response_format == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+    return _post_json(
+        url=f"{route.base_url}/chat/completions",
+        api_key=route.api_key,
+        payload=payload,
+        timeout_seconds=route.timeout_seconds,
+    )
+
+
+def _call_role_route(
+    *,
+    cfg: LLMRuntimeConfig,
+    role_id: str,
+    instructions: str,
+    prompt: str,
+    response_format: str | None,
+) -> tuple[str, dict[str, Any]]:
+    route = cfg.route_for_role(role_id)
+    if route.wire_api == "responses":
+        resp = _responses_request(
+            route=route,
+            instructions=instructions,
+            prompt=prompt,
+            response_format=response_format,
+        )
+        text = _extract_text_from_responses(resp)
+    elif route.wire_api == "chat_completions":
+        resp = _chat_completions_request(
+            route=route,
+            instructions=instructions,
+            prompt=prompt,
+            response_format=response_format,
+        )
+        text = _extract_text_from_chat_completions(resp)
+    else:
+        raise LLMRequestError(f"unsupported_wire_api:{route.wire_api}")
+    if not text:
+        raise LLMRequestError("empty_output_text")
+    return text, {
+        "endpoint": route.wire_api,
+        "role_id": role_id,
+        "route": route.route_name,
+        "provider": route.provider_name,
+        "model": route.model,
+    }
+
+
+def generate_json_for_role(
+    *,
+    cfg: LLMRuntimeConfig,
+    role_id: str,
+    instructions: str,
+    prompt: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if request_kind not in {"main", "review"}:
-        raise ValueError("request_kind must be main or review")
+    text, meta = _call_role_route(
+        cfg=cfg,
+        role_id=role_id,
+        instructions=instructions,
+        prompt=prompt,
+        response_format="json_object",
+    )
+    return _extract_json_from_text(text), meta
 
-    primary_model = cfg.model if request_kind == "main" else cfg.review_model
-    candidates: list[tuple[str, str, str, str | None]] = [
-        (primary_model, cfg.base_url, cfg.api_key, cfg.model_reasoning_effort),
-    ]
-    fallback_key = cfg.fast_api_key or cfg.api_key
-    if cfg.fast_model and cfg.fast_model != primary_model:
-        candidates.append((cfg.fast_model, cfg.fast_base_url, fallback_key, "low"))
 
-    errors: list[str] = []
-    for model, base_url, api_key, effort in candidates:
-        try:
-            resp = _responses_request(
-                base_url=base_url,
-                cfg=cfg,
-                model=model,
-                api_key=api_key,
-                instructions=instructions,
-                prompt=prompt,
-                reasoning_effort=effort,
-            )
-            text = _extract_text_from_responses(resp)
-            parsed = _extract_json_from_text(text)
-            return parsed, {"endpoint": "responses", "model": model}
-        except Exception as exc:
-            errors.append(f"responses:{model}:{exc}")
-        try:
-            resp = _chat_completions_request(
-                base_url=base_url,
-                cfg=cfg,
-                model=model,
-                api_key=api_key,
-                instructions=instructions,
-                prompt=prompt,
-            )
-            text = _extract_text_from_chat(resp)
-            parsed = _extract_json_from_text(text)
-            return parsed, {"endpoint": "chat.completions", "model": model}
-        except Exception as exc:
-            errors.append(f"chat.completions:{model}:{exc}")
-
-    raise LLMRequestError("llm_all_attempts_failed: " + " | ".join(errors))
+def generate_text_for_role(
+    *,
+    cfg: LLMRuntimeConfig,
+    role_id: str,
+    instructions: str,
+    prompt: str,
+) -> tuple[str, dict[str, Any]]:
+    return _call_role_route(
+        cfg=cfg,
+        role_id=role_id,
+        instructions=instructions,
+        prompt=prompt,
+        response_format=None,
+    )

@@ -1,0 +1,82 @@
+{
+  "project_id": "cauchy-backward-induction-real",
+  "title": "柯西反向归纳法科普视频",
+  "source_bundle": {
+    "paper_path": "tests/柯西的反向归纳法.md",
+    "note_paths": [],
+    "audience": "本科高年级数学学习者与科普观众",
+    "style_refs": [
+      "先直觉后证明",
+      "每段只讲一个关键跨越",
+      "术语与公式口径保持一致",
+      "数学结构演示优先用 Manim，背景与导语优先用 HTML"
+    ]
+  },
+  "segments": [
+    {
+      "id": "seg-cauchy-amgm",
+      "title": "柯西反向归纳法与 AM-GM 起点",
+      "goal": "建立反向归纳法的三条规则，并解释它为何能拿下 AM-GM 不等式。",
+      "narration": "先从 AM-GM 的直觉目标出发，再把柯西反向归纳法拆成基步、倍增步和回退步，最后说明它如何覆盖所有正整数。",
+      "modality": "hybrid",
+      "formulas": [
+        "\\frac{a_1+\\cdots+a_n}{n}\\geq \\sqrt[n]{a_1\\cdots a_n}",
+        "P(1),\\ P(n)\\Rightarrow P(2n),\\ P(m+1)\\Rightarrow P(m)"
+      ],
+      "html_motion_notes": [
+        "用时间轴展示 1, 2, 4, 8 的倍增覆盖",
+        "把 dyadic 区间与回退箭头叠加到整数轴上"
+      ],
+      "requires_svg_motion": true,
+      "estimated_seconds": 26
+    },
+    {
+      "id": "seg-jensen-midpoint",
+      "title": "中点凸为何推出 Jensen 不等式",
+      "goal": "展示中点凸到 Jensen 的反向归纳结构，并解释连续性如何把 dyadic 参数推进到凸性。",
+      "narration": "先把中点凸写成 n 等分平均的雏形，再用反向归纳法把二等分扩成任意正整数，最后把 dyadic 有理数逼近连续凸性。",
+      "modality": "hybrid",
+      "formulas": [
+        "\\frac{f(x)+f(y)}{2}\\ge f\\left(\\frac{x+y}{2}\\right)",
+        "\\frac{f(x_1)+\\cdots+f(x_n)}{n}\\ge f\\left(\\frac{x_1+\\cdots+x_n}{n}\\right)",
+        "f(tx+(1-t)y)\\le tf(x)+(1-t)f(y)"
+      ],
+      "html_motion_notes": [
+        "用参数 t 的滑条展示 dyadic 点逐渐填满区间",
+        "将 Jensen 平均点和函数图像同步高亮"
+      ],
+      "requires_svg_motion": true,
+      "estimated_seconds": 32
+    },
+    {
+      "id": "seg-nilpotent-ring",
+      "title": "环里幂零元为什么只能是零",
+      "goal": "把代数命题改写成关于指数 n 的命题，并展示偶数步与回退步如何锁死所有幂零元。",
+      "narration": "这一段把抽象代数问题翻译成指数命题 P(n)，再展示平方归并与乘一个 x 的回退机制，说明为什么任何幂零元最终都会被逼回零元。",
+      "modality": "html",
+      "html_motion_notes": [
+        "用树状结构显示 n, 2n, n-1 的命题迁移",
+        "突出反证法中的最小幂次下降链"
+      ],
+      "requires_svg_motion": true,
+      "estimated_seconds": 24
+    },
+    {
+      "id": "seg-hilbert-operator",
+      "title": "Hilbert 空间自伴算子范数的反向归纳法",
+      "goal": "解释为什么自伴条件把范数平方结构暴露出来，从而完成 P(n) 到 P(2n) 的关键跳跃。",
+      "narration": "最后一段回到分析背景，先用次可乘性得到上界，再利用自伴算子的内积结构把 A 的二次幂压回 A 的 n 次幂，从而完成整个归纳闭环。",
+      "modality": "manim",
+      "formulas": [
+        "\\|A^n\\|=\\|A\\|^n",
+        "\\|A^{n-1}\\|\\cdot \\|A\\| \\ge \\|A^n\\|",
+        "\\|A^{2n}\\| \\ge \\sup_{\\|x\\|\\le 1} |\\langle A^n x, A^n x \\rangle| = \\|A^n\\|^2"
+      ],
+      "html_motion_notes": [
+        "用算子链和内积框图并行展示不等式来源",
+        "结尾回扣反向归纳法三条规则的统一模板"
+      ],
+      "estimated_seconds": 30
+    }
+  ]
+}

@@ -64,15 +64,44 @@ class EventType(str, Enum):
     STAGE_CHANGED = "stage.changed"
 
 
+class InputDocRole(str, Enum):
+    RAW_MATERIAL = "raw_material"
+    FOCUS_POINTS = "focus_points"
+    ARRANGEMENT_GUIDE = "arrangement_guide"
+    REFERENCE = "reference"
+    STYLE_EXAMPLE = "style_example"
+
+
+@dataclass(slots=True)
+class InputDocument:
+    path: str
+    role: InputDocRole
+    title: str = ""
+    consumer_roles: list[str] = field(default_factory=list)
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "role": self.role.value,
+            "title": self.title,
+            "consumer_roles": self.consumer_roles,
+            "notes": self.notes,
+        }
+
+
 @dataclass(slots=True)
 class SourceBundle:
     paper_path: str
     note_paths: list[str] = field(default_factory=list)
     audience: str = "大众观众"
     style_refs: list[str] = field(default_factory=list)
+    documents: list[InputDocument] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["documents"] = [doc.to_dict() for doc in self.documents]
+        return d
 
 
 @dataclass(slots=True)

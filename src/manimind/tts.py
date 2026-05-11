@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 from typing import Protocol
 
 
@@ -152,6 +153,160 @@ class CommandTTSAdapter:
         return str(target)
 
 
+class F5TTSAdapter:
+    """项目内固定参考音频的 F5-TTS 适配器。"""
+
+    def __init__(
+        self,
+        *,
+        model: str = "F5TTS_v1_Base",
+        python_exe: str | None = None,
+        device: str = "cpu",
+        remove_silence: bool = False,
+        runner_path: str | None = None,
+    ) -> None:
+        self.model = model
+        self.python_exe = python_exe or sys.executable
+        self.device = device
+        self.remove_silence = remove_silence
+        self.runner_path = runner_path
+
+    def _repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
+    def _voice_dir(self, project_id: str) -> Path:
+        return self._repo_root() / "runtime" / "projects" / project_id / "voice"
+
+    def _reference_audio(self, project_id: str) -> Path:
+        configured = os.environ.get("MANIMIND_F5_REFERENCE_AUDIO", "").strip()
+        if configured:
+            return Path(configured)
+        return self._voice_dir(project_id) / "selena_reference.m4a"
+
+    def _reference_text(self, reference_audio: Path) -> str:
+        configured = os.environ.get("MANIMIND_F5_REFERENCE_TEXT", "").strip()
+        if configured:
+            return configured
+        configured_file = os.environ.get("MANIMIND_F5_REFERENCE_TEXT_FILE", "").strip()
+        if configured_file:
+            text_path = Path(configured_file)
+        else:
+            text_path = reference_audio.with_suffix(".txt")
+        if text_path.exists():
+            return text_path.read_text(encoding="utf-8").strip()
+        return ""
+
+    def _cache_root(self, project_id: str) -> Path:
+        configured = os.environ.get("MANIMIND_F5_HF_CACHE_ROOT", "").strip()
+        if configured:
+            return Path(configured)
+        return self._voice_dir(project_id) / "hf-cache"
+
+    def _runner(self) -> Path:
+        configured = self.runner_path or os.environ.get("MANIMIND_F5_RUNNER_PATH", "").strip()
+        if configured:
+            return Path(configured)
+        return self._repo_root() / "scripts" / "f5_tts_generate.py"
+
+    def _run_with_live_output(
+        self,
+        *,
+        command: list[str],
+        env: dict[str, str],
+    ) -> tuple[int, str]:
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        lines: list[str] = []
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                text = line.rstrip("\r\n")
+                if text:
+                    print(f"[f5_tts] {text}", file=sys.stderr, flush=True)
+                    lines.append(text)
+                    if len(lines) > 500:
+                        lines = lines[-500:]
+        proc.wait()
+        return proc.returncode, "\n".join(lines)
+
+    def synthesize(self, job: TTSJob) -> str:
+        target = Path(job.output_path)
+        if target.suffix.lower() != ".wav":
+            target = target.with_suffix(".wav")
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        reference_audio = self._reference_audio(job.project_id)
+        if not reference_audio.exists():
+            raise RuntimeError(f"f5_reference_audio_not_found:{reference_audio}")
+
+        runner = self._runner()
+        if not runner.exists():
+            raise RuntimeError(f"f5_runner_not_found:{runner}")
+
+        cache_root = self._cache_root(job.project_id)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        gen_file = target.with_suffix(".txt")
+        gen_file.write_text(job.script_text, encoding="utf-8")
+
+        command = [
+            self.python_exe,
+            str(runner),
+            "--model",
+            self.model,
+            "--ref-audio",
+            str(reference_audio),
+            "--gen-file",
+            str(gen_file),
+            "--output",
+            str(target),
+            "--hf-cache-root",
+            str(cache_root),
+            "--device",
+            self.device,
+        ]
+        reference_text = self._reference_text(reference_audio)
+        if reference_text:
+            command.extend(["--ref-text", reference_text])
+        if self.remove_silence:
+            command.append("--remove-silence")
+
+        env = os.environ.copy()
+        env.setdefault("HF_HOME", str(cache_root))
+        env.setdefault("HUGGINGFACE_HUB_CACHE", str(cache_root / "hub"))
+        env.setdefault("TRANSFORMERS_CACHE", str(cache_root / "transformers"))
+        live_log = os.environ.get("MANIMIND_F5_LIVE_LOG", "1").strip().lower()
+        if live_log in {"0", "false", "off", "no"}:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            return_code = result.returncode
+            raw_output = result.stderr.strip() or result.stdout.strip() or ""
+        else:
+            return_code, raw_output = self._run_with_live_output(command=command, env=env)
+
+        if return_code != 0:
+            if len(raw_output) > 1600:
+                raw_output = raw_output[-1600:]
+            raise RuntimeError(
+                "tts_f5_failed:"
+                + (raw_output or "unknown")
+            )
+        if not target.exists():
+            raise RuntimeError(f"tts_output_not_found:{target}")
+        return str(target)
+
+
 def build_tts_adapter(provider: str = "noop") -> TTSAdapter:
     """构建 TTS 适配器。"""
     normalized = provider.strip().lower()
@@ -164,4 +319,14 @@ def build_tts_adapter(provider: str = "noop") -> TTSAdapter:
         if not template:
             raise ValueError("missing_MANIMIND_TTS_COMMAND")
         return CommandTTSAdapter(template)
+    if normalized in {"f5_tts", "f5-tts", "f5"}:
+        return F5TTSAdapter(
+            model=os.environ.get("MANIMIND_F5_MODEL", "F5TTS_v1_Base").strip()
+            or "F5TTS_v1_Base",
+            python_exe=os.environ.get("MANIMIND_F5_PYTHON_EXE", "").strip() or None,
+            device=os.environ.get("MANIMIND_F5_DEVICE", "cpu").strip() or "cpu",
+            remove_silence=os.environ.get("MANIMIND_F5_REMOVE_SILENCE", "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            runner_path=os.environ.get("MANIMIND_F5_RUNNER_PATH", "").strip() or None,
+        )
     raise ValueError(f"unsupported_tts_provider: {provider}")

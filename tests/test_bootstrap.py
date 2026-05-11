@@ -28,6 +28,7 @@ def test_check_external_paths_matches_real_repo_layout(tmp_path) -> None:
     (tmp_path / "resources" / "references" / "hyperframes").mkdir(parents=True)
     (tmp_path / "resources" / "skills" / "manim").mkdir(parents=True)
     (tmp_path / "docs").mkdir()
+    (tmp_path / "pdf").mkdir()
     (tmp_path / "resources" / "skills" / "manim" / "SKILL.md").write_text("", encoding="utf-8")
 
     result = check_external_paths(tmp_path)
@@ -36,6 +37,7 @@ def test_check_external_paths_matches_real_repo_layout(tmp_path) -> None:
         "html_skill_root": True,
         "hyperframes_root": True,
         "manim_skill_file": True,
+        "pdf_skill_root": True,
         "docs_root": True,
     }
 

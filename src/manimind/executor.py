@@ -2,27 +2,54 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import json
+import os
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 from .artifact_store import has_output_key, write_output_key
+from .context_assembly import PromptSectionCache
 from .ingest import concatenate_documents, load_source_documents
 from .llm_client import (
     LLMRequestError,
-    generate_json_with_fallback,
+    LLMRuntimeConfig,
+    generate_json_for_role,
     load_llm_runtime_config,
 )
 from .models import EventType, ExecutionTask, PipelineStage, ProjectPlan, TaskStatus
+from .prompt_system import (
+    PromptRecipe,
+    build_prompt_bundle,
+    coordinator_recipe,
+    explorer_recipe,
+    lead_summary_recipe,
+    planner_recipe,
+    reviewer_recipe,
+)
 from .runtime_store import (
     load_execution_task_snapshot,
     persist_agent_message,
+    persist_context_packet,
     persist_plan_snapshot,
     persist_task_update,
 )
 from .task_board import update_execution_task_status
-from .worker_adapters import WorkerExecutionError, WorkerRunResult, render_with_worker
+from .worker_adapters import WorkerExecutionError, render_with_worker
+
+
+def _log_progress(session_id: str, step: str, message: str) -> None:
+    raw = os.environ.get("MANIMIND_PROGRESS_LOG", "1").strip().lower()
+    if raw in {"0", "false", "off", "no"}:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(
+        f"[manimind][{stamp}][session={session_id}][{step}] {message}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _extract_formulas(text: str) -> list[str]:
@@ -32,100 +59,56 @@ def _extract_formulas(text: str) -> list[str]:
         if value:
             formulas.append(value)
     if formulas:
-        return formulas[:12]
+        return formulas[:16]
 
     for match in re.findall(r"\$(.+?)\$", text):
         value = match.strip()
         if value:
             formulas.append(value)
-    return formulas[:12]
+    return formulas[:16]
 
 
-def _extract_glossary(source_text: str) -> list[str]:
-    seeds = [
-        "极大函数",
-        "Vitali 覆盖",
-        "下半连续",
-        "可测",
-        "积分平均",
-        "测度",
+def _clean_glossary_candidate(value: str) -> str:
+    candidate = re.sub(r"\s+", " ", value).strip("：:;；,.，。[]()（）{}\"'“”`")
+    if len(candidate) < 2 or len(candidate) > 40:
+        return ""
+    if any(token in candidate for token in ("$$", "\\", "->", "=>")):
+        return ""
+    return candidate
+
+
+def _extract_glossary_seeds(source_text: str) -> list[str]:
+    candidates: list[str] = []
+    normalized = source_text.replace("\r\n", "\n")
+
+    for line in normalized.splitlines():
+        if line.lstrip().startswith("###"):
+            heading = _clean_glossary_candidate(line.lstrip("# ").strip())
+            if heading:
+                candidates.append(heading)
+
+    patterns = [
+        r"[“\"]([^“”\"\n]{2,40})[”\"]",
+        r"\[\[([^\]#]{2,40})(?:#[^\]]*)?\]\]",
+        r"\*\*([^*\n]{2,40})\*\*",
     ]
-    found = [item for item in seeds if item in source_text]
-    if len(found) >= 3:
-        return found[:8]
-    return seeds[:6]
+    for pattern in patterns:
+        for match in re.findall(pattern, normalized):
+            candidate = _clean_glossary_candidate(match)
+            if candidate:
+                candidates.append(candidate)
 
-
-def _build_explorer_findings(
-    *,
-    plan: ProjectPlan,
-    source_text: str,
-    formulas: list[str],
-    docs: list[Any],
-) -> dict[str, Any]:
-    document_findings: list[dict[str, Any]] = []
-    for item in docs:
-        document_findings.append(
-            {
-                "path": getattr(item, "path", ""),
-                "kind": getattr(item, "kind", ""),
-                "text_length": len(getattr(item, "text", "") or ""),
-                "warning": getattr(item, "warning", None),
-            }
-        )
-    segment_focus = [
-        {
-            "segment_id": segment.id,
-            "title": segment.title,
-            "modality": segment.modality.value,
-            "formula_count": len(segment.formulas),
-            "requires_svg_motion": segment.requires_svg_motion,
-        }
-        for segment in plan.segments
-    ]
-    risk_flags: list[str] = []
-    if not formulas:
-        risk_flags.append("source_formula_missing")
-    if not source_text.strip():
-        risk_flags.append("source_text_empty")
-    if any(item.get("warning") for item in document_findings):
-        risk_flags.append("source_warning_present")
-    return {
-        "documents": document_findings,
-        "segment_focus": segment_focus,
-        "formula_candidates": formulas[:12],
-        "risk_flags": risk_flags,
-    }
-
-
-def _build_planner_brief(
-    *,
-    plan: ProjectPlan,
-    glossary: list[str],
-    explorer_findings: dict[str, Any],
-) -> dict[str, Any]:
-    segment_priorities = [
-        {
-            "segment_id": segment.id,
-            "objective": segment.goal,
-            "primary_worker_path": segment.modality.value,
-            "estimated_seconds": segment.estimated_seconds,
-        }
-        for segment in plan.segments
-    ]
-    risk_flags = explorer_findings.get("risk_flags", [])
-    if not isinstance(risk_flags, list):
-        risk_flags = []
-    return {
-        "segment_priorities": segment_priorities,
-        "glossary_terms": glossary[:8],
-        "must_checks": [
-            "术语口径一致",
-            "公式解释与镜头叙事对齐",
-            "每个片段产物必须可追溯到 approved 记录",
-        ],
-        "risk_flags": risk_flags,
-    }
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        key = item.replace(" ", "").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+        if len(deduped) >= 12:
+            break
+    return deduped
 
 
 def _coerce_str_list(value: Any, *, limit: int) -> list[str]:
@@ -144,6 +127,45 @@ def _coerce_str_list(value: Any, *, limit: int) -> list[str]:
     return output
 
 
+def _coerce_formula_catalog(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            formula = item.get("formula")
+            if not isinstance(formula, str) or not formula.strip():
+                continue
+            output.append(
+                {
+                    "formula": formula.strip(),
+                    "explanation": str(item.get("explanation") or "").strip(),
+                    "usage": str(item.get("usage") or "").strip(),
+                }
+            )
+            continue
+        if isinstance(item, str) and item.strip():
+            output.append(
+                {
+                    "formula": item.strip(),
+                    "explanation": "",
+                    "usage": "",
+                }
+            )
+    return output[:16]
+
+
+def _coerce_summary_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("text", "summary", "content"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return ""
+
+
 def _default_storyboard_outline(plan: ProjectPlan) -> list[dict[str, Any]]:
     return [
         {
@@ -152,8 +174,15 @@ def _default_storyboard_outline(plan: ProjectPlan) -> list[dict[str, Any]]:
             "goal": segment.goal,
             "narration": segment.narration,
             "modality": segment.modality.value,
+            "estimated_seconds": segment.estimated_seconds,
             "formulas": segment.formulas,
             "html_motion_notes": segment.html_motion_notes,
+            "scene_beats": [],
+            "worker_instructions": {
+                "html": "",
+                "manim": "",
+                "svg": "",
+            },
         }
         for segment in plan.segments
     ]
@@ -182,13 +211,17 @@ def _normalize_storyboard_outline(
         if isinstance(narration, str) and narration.strip():
             segment.narration = narration.strip()
 
-        formulas = _coerce_str_list(item.get("formulas"), limit=8)
+        formulas = _coerce_str_list(item.get("formulas"), limit=10)
         if formulas:
             segment.formulas = formulas
 
-        motion_notes = _coerce_str_list(item.get("html_motion_notes"), limit=8)
+        motion_notes = _coerce_str_list(item.get("html_motion_notes"), limit=10)
         if motion_notes:
             segment.html_motion_notes = motion_notes
+
+        worker_instructions = item.get("worker_instructions")
+        if not isinstance(worker_instructions, dict):
+            worker_instructions = {}
 
         merged.append(
             {
@@ -197,169 +230,60 @@ def _normalize_storyboard_outline(
                 "goal": segment.goal,
                 "narration": segment.narration,
                 "modality": segment.modality.value,
+                "estimated_seconds": int(
+                    item.get("estimated_seconds") or segment.estimated_seconds
+                ),
                 "formulas": segment.formulas,
                 "html_motion_notes": segment.html_motion_notes,
+                "scene_beats": _coerce_str_list(item.get("scene_beats"), limit=10),
+                "worker_instructions": {
+                    "html": str(worker_instructions.get("html") or "").strip(),
+                    "manim": str(worker_instructions.get("manim") or "").strip(),
+                    "svg": str(worker_instructions.get("svg") or "").strip(),
+                },
             }
         )
     return merged
 
 
-def _generate_main_outputs_with_llm(
-    *,
+def _normalize_segment_priorities(
     plan: ProjectPlan,
-    source_text: str,
-    fallback_formulas: list[str],
-    fallback_glossary: list[str],
-    fallback_planner_brief: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    cfg = load_llm_runtime_config()
-    source_excerpt = source_text[:16000] if source_text else ""
-    payload = {
-        "project_id": plan.project_id,
-        "title": plan.title,
-        "audience": plan.source_bundle.audience,
-        "style_refs": plan.source_bundle.style_refs,
-        "segments": [
+    value: Any,
+) -> list[dict[str, Any]]:
+    candidate_map: dict[str, dict[str, Any]] = {}
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            segment_id = item.get("segment_id")
+            if isinstance(segment_id, str) and segment_id.strip():
+                candidate_map[segment_id.strip()] = item
+
+    normalized: list[dict[str, Any]] = []
+    for segment in plan.segments:
+        candidate = candidate_map.get(segment.id, {})
+        objective = candidate.get("objective")
+        primary_worker = candidate.get("primary_worker_path")
+        estimated = candidate.get("estimated_seconds")
+        normalized.append(
             {
                 "segment_id": segment.id,
-                "title": segment.title,
-                "goal": segment.goal,
-                "narration": segment.narration,
-                "modality": segment.modality.value,
-                "formulas": segment.formulas,
-                "html_motion_notes": segment.html_motion_notes,
-                "estimated_seconds": segment.estimated_seconds,
+                "objective": (
+                    objective.strip()
+                    if isinstance(objective, str) and objective.strip()
+                    else segment.goal
+                ),
+                "primary_worker_path": (
+                    primary_worker.strip()
+                    if isinstance(primary_worker, str) and primary_worker.strip()
+                    else segment.modality.value
+                ),
+                "estimated_seconds": int(estimated)
+                if isinstance(estimated, int) and estimated > 0
+                else segment.estimated_seconds,
             }
-            for segment in plan.segments
-        ],
-        "fallback_formulas": fallback_formulas[:12],
-        "fallback_glossary": fallback_glossary[:8],
-        "source_excerpt": source_excerpt,
-    }
-    instructions = (
-        "你是数学科普视频总编导。"
-        "请只输出一个 JSON 对象，不要输出 Markdown。"
-        "内容必须忠于输入，术语统一，可直接用于动画制作。"
-    )
-    prompt = (
-        "请基于输入材料生成可执行编排内容，输出 JSON schema：\n"
-        "{\n"
-        '  "research_summary": "string",\n'
-        '  "glossary_terms": ["string"],\n'
-        '  "formula_candidates": ["string"],\n'
-        '  "planner_brief": {\n'
-        '    "segment_priorities": [{"segment_id":"string","objective":"string","primary_worker_path":"string","estimated_seconds":20}],\n'
-        '    "glossary_terms": ["string"],\n'
-        '    "must_checks": ["string"],\n'
-        '    "risk_flags": ["string"]\n'
-        "  },\n"
-        '  "storyboard_outline": [\n'
-        '    {"segment_id":"string","narration":"string","formulas":["string"],"html_motion_notes":["string"]}\n'
-        "  ]\n"
-        "}\n\n"
-        "输入：\n"
-        + json.dumps(payload, ensure_ascii=False)
-    )
-    generated, meta = generate_json_with_fallback(
-        cfg=cfg,
-        instructions=instructions,
-        prompt=prompt,
-        request_kind="main",
-    )
-    research_summary = generated.get("research_summary")
-    if not isinstance(research_summary, str) or not research_summary.strip():
-        research_summary = source_excerpt or "no source text loaded"
-
-    glossary_terms = _coerce_str_list(generated.get("glossary_terms"), limit=8)
-    if not glossary_terms:
-        glossary_terms = fallback_glossary[:8]
-
-    formula_candidates = _coerce_str_list(generated.get("formula_candidates"), limit=12)
-    if not formula_candidates:
-        formula_candidates = fallback_formulas[:12]
-
-    planner_brief = generated.get("planner_brief")
-    if not isinstance(planner_brief, dict):
-        planner_brief = fallback_planner_brief
-    else:
-        planner_brief = {
-            "segment_priorities": planner_brief.get(
-                "segment_priorities",
-                fallback_planner_brief.get("segment_priorities", []),
-            ),
-            "glossary_terms": _coerce_str_list(
-                planner_brief.get("glossary_terms"), limit=8
-            )
-            or fallback_planner_brief.get("glossary_terms", []),
-            "must_checks": _coerce_str_list(planner_brief.get("must_checks"), limit=8)
-            or fallback_planner_brief.get("must_checks", []),
-            "risk_flags": _coerce_str_list(planner_brief.get("risk_flags"), limit=8),
-        }
-
-    storyboard_outline = _normalize_storyboard_outline(
-        plan,
-        generated.get("storyboard_outline"),
-    )
-    return (
-        {
-            "research_summary": research_summary.strip(),
-            "glossary_terms": glossary_terms,
-            "formula_candidates": formula_candidates,
-            "planner_brief": planner_brief,
-            "storyboard_outline": storyboard_outline,
-        },
-        meta,
-    )
-
-
-def _generate_review_draft_with_llm(
-    *,
-    plan: ProjectPlan,
-    render_evidence: list[dict[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    cfg = load_llm_runtime_config()
-    payload = {
-        "project_id": plan.project_id,
-        "title": plan.title,
-        "review_checkpoints": [item.to_dict() for item in plan.review_checkpoints],
-        "render_evidence": render_evidence,
-    }
-    instructions = (
-        "你是审核 Agent。"
-        "你只能输出审核草案，不能直接 approve。"
-        "请输出 JSON 对象，不要输出 Markdown。"
-    )
-    prompt = (
-        "请输出 JSON schema：\n"
-        "{\n"
-        '  "summary": "string",\n'
-        '  "decision": "pending_human_confirmation",\n'
-        '  "risk_notes": ["string"],\n'
-        '  "must_check": ["string"]\n'
-        "}\n\n"
-        "输入：\n"
-        + json.dumps(payload, ensure_ascii=False)
-    )
-    generated, meta = generate_json_with_fallback(
-        cfg=cfg,
-        instructions=instructions,
-        prompt=prompt,
-        request_kind="review",
-    )
-    summary = generated.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        summary = "AI reviewer draft generated. Awaiting human approval."
-    risk_notes = _coerce_str_list(generated.get("risk_notes"), limit=8)
-    must_check = _coerce_str_list(generated.get("must_check"), limit=8)
-    return (
-        {
-            "summary": summary.strip(),
-            "decision": "pending_human_confirmation",
-            "risk_notes": risk_notes,
-            "must_check": must_check,
-        },
-        meta,
-    )
+        )
+    return normalized
 
 
 def _task_by_id(plan: ProjectPlan, task_id: str) -> ExecutionTask:
@@ -385,27 +309,12 @@ def _segment_by_id(plan: ProjectPlan, segment_id: str):
     raise KeyError(f"unknown_segment:{segment_id}")
 
 
-def _write_required_outputs(
+def _complete_task(
     plan: ProjectPlan,
     session_id: str,
     task_id: str,
-    payload_builder: dict[str, Any],
-) -> list[str]:
-    task = _task_by_id(plan, task_id)
-    paths: list[str] = []
-    for output_key in task.required_outputs:
-        payload = {
-            "project_id": plan.project_id,
-            "task_id": task_id,
-            "output_key": output_key,
-            **payload_builder,
-        }
-        written = write_output_key(plan, session_id, output_key, payload)
-        paths.append(str(written))
-    return paths
-
-
-def _complete_task(plan: ProjectPlan, session_id: str, task_id: str, actor_role: str) -> None:
+    actor_role: str,
+) -> None:
     result = update_execution_task_status(
         plan=plan,
         task_id=task_id,
@@ -426,37 +335,108 @@ def _complete_task(plan: ProjectPlan, session_id: str, task_id: str, actor_role:
         raise RuntimeError(f"task_update_failed:{task_id}:{result.reason}")
 
 
-def _fallback_manim_result(
+def _complete_task_without_outputs(
     plan: ProjectPlan,
+    session_id: str,
+    task_id: str,
+    actor_role: str,
+) -> None:
+    result = update_execution_task_status(
+        plan=plan,
+        task_id=task_id,
+        new_status=TaskStatus.COMPLETED,
+        actor_role=actor_role,
+        output_checker=lambda _key: True,
+    )
+    mutation = {
+        "success": result.success,
+        "task_id": result.task_id,
+        "from_status": result.from_status,
+        "to_status": result.to_status,
+        "reason": result.reason,
+        "verification_nudge_needed": result.verification_nudge_needed,
+    }
+    persist_task_update(plan=plan, session_id=session_id, mutation=mutation)
+    if not result.success:
+        raise RuntimeError(f"task_update_failed:{task_id}:{result.reason}")
+
+
+def _call_json_role(
+    *,
+    cfg: LLMRuntimeConfig,
+    plan: ProjectPlan,
+    session_id: str,
+    role_id: str,
+    stage: PipelineStage,
+    recipe: PromptRecipe,
+    payload: dict[str, Any],
+    prompt_cache: PromptSectionCache,
+    allow_disallowed_stage: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    bundle = build_prompt_bundle(
+        plan=plan,
+        session_id=session_id,
+        role_id=role_id,
+        stage=stage,
+        recipe=recipe,
+        payload=payload,
+        cache=prompt_cache,
+        allow_disallowed_stage=allow_disallowed_stage,
+    )
+    persist_context_packet(
+        plan=plan,
+        session_id=session_id,
+        packet=bundle.packet,
+        prompt_sections=bundle.prompt_sections,
+    )
+    return generate_json_for_role(
+        cfg=cfg,
+        role_id=role_id,
+        instructions=bundle.system_prompt,
+        prompt=bundle.user_prompt,
+    )
+
+
+def _document_payloads(docs: list[Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for item in docs:
+        payloads.append(
+            {
+                "path": getattr(item, "path", ""),
+                "kind": getattr(item, "kind", ""),
+                "warning": getattr(item, "warning", None),
+                "excerpt": (getattr(item, "text", "") or "")[:4000],
+            }
+        )
+    return payloads
+
+
+def _worker_kind_from_role(role_id: str) -> str:
+    if not role_id.endswith("_worker"):
+        return role_id
+    return role_id[: -len("_worker")]
+
+
+def _planned_primary_worker_path(
+    planner_brief: dict[str, Any],
     segment_id: str,
-    reason: str,
-) -> WorkerRunResult:
-    out_dir = Path(plan.runtime_layout.output_dir) / "manim" / re.sub(
-        r"[^0-9A-Za-z_-]+", "-", segment_id
-    ).strip("-").lower()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    note_path = out_dir / "fallback-note.txt"
-    note_path.write_text(
-        "\n".join(
-            [
-                "Manim render fallback",
-                f"segment_id={segment_id}",
-                f"reason={reason}",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return WorkerRunResult(
-        worker_role="manim_worker",
-        segment_id=segment_id,
-        summary=f"Manim fallback used: {reason}",
-        artifact_files=[str(note_path)],
-        metadata={
-            "worker": "manim",
-            "fallback": True,
-            "reason": reason,
-        },
-    )
+) -> str | None:
+    priorities = planner_brief.get("segment_priorities")
+    if not isinstance(priorities, list):
+        return None
+    for item in priorities:
+        if not isinstance(item, dict):
+            continue
+        if item.get("segment_id") != segment_id:
+            continue
+        candidate = item.get("primary_worker_path")
+        if not isinstance(candidate, str):
+            return None
+        normalized = candidate.strip().lower()
+        if normalized in {"html", "manim", "svg", "hybrid"}:
+            return normalized
+        return None
+    return None
 
 
 def run_to_review(
@@ -465,59 +445,91 @@ def run_to_review(
     source_manifest: str,
 ) -> dict[str, Any]:
     """把计划推进到 REVIEW 阶段（含 review.draft）。"""
+    _log_progress(session_id, "run-to-review", f"start project={plan.project_id}")
     persist_plan_snapshot(plan=plan, session_id=session_id, source_manifest=source_manifest)
     load_execution_task_snapshot(plan)
 
+    cfg = load_llm_runtime_config()
+    prompt_cache = PromptSectionCache()
+
     docs = load_source_documents(plan.source_bundle, base_dir=Path.cwd())
     source_text = concatenate_documents(docs)
-    formulas = _extract_formulas(source_text)
-    glossary = _extract_glossary(source_text)
-    research_summary = source_text[:4800] if source_text else "no source text loaded"
-    llm_main_meta: dict[str, Any] | None = None
-    llm_main_error: str | None = None
-
-    _write_required_outputs(
-        plan,
+    source_excerpt = source_text[:12000] if source_text else ""
+    seed_formulas = _extract_formulas(source_text)
+    seed_glossary = _extract_glossary_seeds(source_text)
+    _log_progress(
         session_id,
-        "ingest.sources",
-        {
-            "handoff": {
-                "source_bundle": plan.source_bundle.to_dict(),
-                "documents": [item.to_dict() for item in docs],
-                "note": "ingest complete",
-            }
+        "ingest",
+        f"loaded_docs={len(docs)} source_chars={len(source_text)}",
+    )
+
+    ingest_payload = {
+        "source_bundle": plan.source_bundle.to_dict(),
+        "documents": [item.to_dict() for item in docs],
+        "note": "ingest complete",
+    }
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.session.handoff",
+        payload={
+            "project_id": plan.project_id,
+            "stage": "ingest",
+            "handoff": ingest_payload,
         },
     )
     _complete_task(plan, session_id, "ingest.sources", "lead")
+    _log_progress(session_id, "ingest", "ingest.sources completed")
 
-    explorer_findings = _build_explorer_findings(
+    explorer_payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "audience": plan.source_bundle.audience,
+        "style_refs": plan.source_bundle.style_refs,
+        "segments": [segment.to_dict() for segment in plan.segments],
+        "documents": _document_payloads(docs),
+        "source_excerpt": source_excerpt,
+        "seed_formulas": seed_formulas,
+        "seed_glossary": seed_glossary,
+    }
+    explorer_findings, explorer_meta = _call_json_role(
+        cfg=cfg,
         plan=plan,
-        source_text=source_text,
-        formulas=formulas,
-        docs=docs,
+        session_id=session_id,
+        role_id="explorer",
+        stage=PipelineStage.SUMMARIZE,
+        recipe=explorer_recipe(),
+        payload=explorer_payload,
+        prompt_cache=prompt_cache,
     )
-    fallback_planner_brief = _build_planner_brief(
-        plan=plan,
-        glossary=glossary,
-        explorer_findings=explorer_findings,
+    _log_progress(session_id, "explorer", "llm output received")
+    explorer_formulas = _coerce_str_list(
+        explorer_findings.get("formula_candidates"),
+        limit=16,
     )
-    planner_brief = fallback_planner_brief
-    storyboard_outline = _default_storyboard_outline(plan)
-    try:
-        llm_main_outputs, llm_main_meta = _generate_main_outputs_with_llm(
-            plan=plan,
-            source_text=source_text,
-            fallback_formulas=formulas,
-            fallback_glossary=glossary,
-            fallback_planner_brief=fallback_planner_brief,
-        )
-        research_summary = llm_main_outputs["research_summary"]
-        glossary = llm_main_outputs["glossary_terms"]
-        formulas = llm_main_outputs["formula_candidates"]
-        planner_brief = llm_main_outputs["planner_brief"]
-        storyboard_outline = llm_main_outputs["storyboard_outline"]
-    except (LLMRequestError, ValueError, TypeError, KeyError) as exc:
-        llm_main_error = str(exc)
+    if not explorer_formulas:
+        explorer_formulas = seed_formulas
+    explorer_glossary = _coerce_str_list(
+        explorer_findings.get("glossary_candidates"),
+        limit=12,
+    )
+    if not explorer_glossary:
+        explorer_glossary = seed_glossary
+    explorer_story_beats = _coerce_str_list(
+        explorer_findings.get("story_beats"),
+        limit=12,
+    )
+    explorer_risk_flags = _coerce_str_list(
+        explorer_findings.get("risk_flags"),
+        limit=12,
+    )
+    source_highlights = _coerce_str_list(
+        explorer_findings.get("source_highlights"),
+        limit=12,
+    )
+    document_findings = explorer_findings.get("document_findings")
+    if not isinstance(document_findings, list):
+        document_findings = _document_payloads(docs)
 
     persist_agent_message(
         plan=plan,
@@ -537,28 +549,165 @@ def run_to_review(
         stage=PipelineStage.SUMMARIZE,
         task_id="explore.references",
         payload={
-            "summary": "Explorer reference scan complete.",
-            "findings": explorer_findings,
+            "summary": "Explorer findings prepared.",
+            "llm_generation": explorer_meta,
+            "risk_flags": explorer_risk_flags,
         },
     )
-
-    _write_required_outputs(
-        plan,
+    _log_progress(
         session_id,
-        "summarize.research",
-        {
-            "summary": research_summary,
-            "glossary": glossary,
-            "formulas": formulas,
-            "source_documents": [item.to_dict() for item in docs],
-            "explorer_findings": explorer_findings,
-            "llm_generation": {
-                "meta": llm_main_meta,
-                "error": llm_main_error,
-            },
+        "explorer",
+        f"completed formulas={len(explorer_formulas)} glossary={len(explorer_glossary)}",
+    )
+
+    lead_payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "audience": plan.source_bundle.audience,
+        "style_refs": plan.source_bundle.style_refs,
+        "segments": [segment.to_dict() for segment in plan.segments],
+        "source_excerpt": source_excerpt,
+        "explorer_findings": {
+            "document_findings": document_findings,
+            "formula_candidates": explorer_formulas,
+            "glossary_candidates": explorer_glossary,
+            "story_beats": explorer_story_beats,
+            "risk_flags": explorer_risk_flags,
+            "source_highlights": source_highlights,
+        },
+    }
+    lead_outputs, lead_meta = _call_json_role(
+        cfg=cfg,
+        plan=plan,
+        session_id=session_id,
+        role_id="lead",
+        stage=PipelineStage.SUMMARIZE,
+        recipe=lead_summary_recipe(),
+        payload=lead_payload,
+        prompt_cache=prompt_cache,
+    )
+    research_summary = _coerce_summary_text(
+        lead_outputs.get("research_summary")
+    ) or _coerce_summary_text(lead_outputs.get("summary"))
+    if not research_summary:
+        lead_retry_payload = {
+            **lead_payload,
+            "contract_hint": (
+                "Return a non-empty string field `research_summary` in plain Chinese."
+            ),
+        }
+        lead_outputs, lead_meta = _call_json_role(
+            cfg=cfg,
+            plan=plan,
+            session_id=session_id,
+            role_id="lead",
+            stage=PipelineStage.SUMMARIZE,
+            recipe=lead_summary_recipe(),
+            payload=lead_retry_payload,
+            prompt_cache=prompt_cache,
+        )
+        research_summary = _coerce_summary_text(
+            lead_outputs.get("research_summary")
+        ) or _coerce_summary_text(lead_outputs.get("summary"))
+    if not research_summary:
+        raise ValueError("invalid_research_summary")
+    glossary_terms = _coerce_str_list(lead_outputs.get("glossary_terms"), limit=12)
+    if not glossary_terms:
+        glossary_terms = explorer_glossary
+    formula_catalog = _coerce_formula_catalog(lead_outputs.get("formula_catalog"))
+    if not formula_catalog and explorer_formulas:
+        formula_catalog = [
+            {"formula": item, "explanation": "", "usage": ""}
+            for item in explorer_formulas
+        ]
+    style_guide = _coerce_str_list(lead_outputs.get("style_guide"), limit=12)
+    if not style_guide:
+        style_guide = list(plan.source_bundle.style_refs)
+
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.research.summary",
+        payload={
+            "project_id": plan.project_id,
+            "summary": research_summary.strip(),
+            "source_highlights": source_highlights,
+            "risk_flags": explorer_risk_flags,
+            "llm_generation": lead_meta,
+        },
+    )
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.glossary",
+        payload={
+            "project_id": plan.project_id,
+            "terms": glossary_terms,
+            "llm_generation": lead_meta,
+        },
+    )
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.formula.catalog",
+        payload={
+            "project_id": plan.project_id,
+            "items": formula_catalog,
+            "llm_generation": lead_meta,
+        },
+    )
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.style.guide",
+        payload={
+            "project_id": plan.project_id,
+            "items": style_guide,
+            "llm_generation": lead_meta,
         },
     )
     _complete_task(plan, session_id, "summarize.research", "lead")
+    _log_progress(
+        session_id,
+        "lead",
+        f"summarize.research completed glossary={len(glossary_terms)} formulas={len(formula_catalog)}",
+    )
+
+    planner_payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "segments": [segment.to_dict() for segment in plan.segments],
+        "research_summary": research_summary.strip(),
+        "glossary_terms": glossary_terms,
+        "formula_catalog": formula_catalog,
+        "style_guide": style_guide,
+        "explorer_findings": {
+            "story_beats": explorer_story_beats,
+            "risk_flags": explorer_risk_flags,
+            "source_highlights": source_highlights,
+        },
+    }
+    planner_outputs, planner_meta = _call_json_role(
+        cfg=cfg,
+        plan=plan,
+        session_id=session_id,
+        role_id="planner",
+        stage=PipelineStage.PLAN,
+        recipe=planner_recipe(),
+        payload=planner_payload,
+        prompt_cache=prompt_cache,
+    )
+    planner_brief = {
+        "segment_priorities": _normalize_segment_priorities(
+            plan,
+            planner_outputs.get("segment_priorities"),
+        ),
+        "must_checks": _coerce_str_list(planner_outputs.get("must_checks"), limit=12),
+        "risk_flags": _coerce_str_list(planner_outputs.get("risk_flags"), limit=12)
+        or explorer_risk_flags,
+        "visual_briefs": planner_outputs.get("visual_briefs", []),
+        "narrative_arc": _coerce_str_list(planner_outputs.get("narrative_arc"), limit=8),
+    }
     persist_agent_message(
         plan=plan,
         session_id=session_id,
@@ -569,6 +718,11 @@ def run_to_review(
         payload={"progress_label": "build_plan_brief"},
     )
     _complete_task(plan, session_id, "plan.research_brief", "planner")
+    _log_progress(
+        session_id,
+        "planner",
+        f"plan.research_brief completed segments={len(planner_brief['segment_priorities'])}",
+    )
     persist_agent_message(
         plan=plan,
         session_id=session_id,
@@ -579,27 +733,103 @@ def run_to_review(
         payload={
             "summary": "Planner brief prepared.",
             "brief": planner_brief,
-            "llm_generation": {
-                "meta": llm_main_meta,
-                "error": llm_main_error,
-            },
+            "llm_generation": planner_meta,
         },
     )
-    _write_required_outputs(
+
+    coordinator_payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "audience": plan.source_bundle.audience,
+        "style_refs": style_guide,
+        "segments": [segment.to_dict() for segment in plan.segments],
+        "research_summary": research_summary.strip(),
+        "glossary_terms": glossary_terms,
+        "formula_catalog": formula_catalog,
+        "planner_brief": planner_brief,
+        "story_beats": explorer_story_beats,
+        "source_highlights": source_highlights,
+        "seed_storyboard_outline": _default_storyboard_outline(plan),
+    }
+    coordinator_outputs, coordinator_meta = _call_json_role(
+        cfg=cfg,
+        plan=plan,
+        session_id=session_id,
+        role_id="coordinator",
+        stage=PipelineStage.PLAN,
+        recipe=coordinator_recipe(),
+        payload=coordinator_payload,
+        prompt_cache=prompt_cache,
+    )
+    storyboard_outline = _normalize_storyboard_outline(
         plan,
-        session_id,
-        "plan.storyboard",
-        {
+        coordinator_outputs.get("script_outline"),
+    )
+    handoff_notes = coordinator_outputs.get("handoff_notes")
+    if not isinstance(handoff_notes, dict):
+        handoff_notes = {}
+    storyboard_master = coordinator_outputs.get("storyboard_master")
+    if not isinstance(storyboard_master, dict):
+        storyboard_master = {}
+
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.narration.script",
+        payload={
+            "project_id": plan.project_id,
+            "task_id": "plan.storyboard",
+            "output_key": f"{plan.project_id}.narration.script",
             "script_outline": storyboard_outline,
-            "style": plan.source_bundle.style_refs,
+            "style": style_guide,
             "planner_brief": planner_brief,
-            "llm_generation": {
-                "meta": llm_main_meta,
-                "error": llm_main_error,
-            },
+            "llm_generation": coordinator_meta,
+        },
+    )
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.storyboard.master",
+        payload={
+            "project_id": plan.project_id,
+            "task_id": "plan.storyboard",
+            "output_key": f"{plan.project_id}.storyboard.master",
+            "script_outline": storyboard_outline,
+            "storyboard_master": storyboard_master,
+            "handoff_notes": handoff_notes,
+            "planner_brief": planner_brief,
+            "llm_generation": coordinator_meta,
+        },
+    )
+    write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=f"{plan.project_id}.session.handoff",
+        payload={
+            "project_id": plan.project_id,
+            "stage": "plan",
+            "handoff_notes": handoff_notes,
+            "storyboard_outline": storyboard_outline,
+            "planner_brief": planner_brief,
+            "llm_generation": coordinator_meta,
         },
     )
     _complete_task(plan, session_id, "plan.storyboard", "coordinator")
+    _log_progress(
+        session_id,
+        "coordinator",
+        f"plan.storyboard completed outline={len(storyboard_outline)}",
+    )
+
+    shared_context = {
+        "research_summary": research_summary.strip(),
+        "glossary_terms": glossary_terms,
+        "formula_catalog": formula_catalog,
+        "style_guide": style_guide,
+        "planner_brief": planner_brief,
+        "storyboard_outline": storyboard_outline,
+        "handoff_notes": handoff_notes,
+    }
 
     render_tasks = [
         task
@@ -610,6 +840,56 @@ def run_to_review(
 
     for task in render_tasks:
         worker_role = task.owner_role
+        segment_id = _segment_id_from_task(task)
+        segment = _segment_by_id(plan, segment_id)
+        planned_worker_path = _planned_primary_worker_path(planner_brief, segment.id)
+        worker_kind = _worker_kind_from_role(worker_role)
+        _log_progress(
+            session_id,
+            "dispatch",
+            f"task={task.id} worker={worker_kind} planned={planned_worker_path or 'auto'}",
+        )
+
+        if planned_worker_path in {"html", "manim", "svg"} and worker_kind != planned_worker_path:
+            persist_agent_message(
+                plan=plan,
+                session_id=session_id,
+                event_type=EventType.WORKER_PROGRESS,
+                role_id=worker_role,
+                stage=PipelineStage.DISPATCH,
+                task_id=task.id,
+                payload={"progress_label": "skip_dispatch"},
+            )
+            _complete_task_without_outputs(plan, session_id, task.id, worker_role)
+            persist_agent_message(
+                plan=plan,
+                session_id=session_id,
+                event_type=EventType.WORKER_RESULT,
+                role_id=worker_role,
+                stage=PipelineStage.DISPATCH,
+                task_id=task.id,
+                payload={
+                    "summary": f"Skipped by planner. primary_worker_path={planned_worker_path}.",
+                    "dispatch_decision": "skipped_by_plan",
+                },
+            )
+            render_evidence.append(
+                {
+                    "task_id": task.id,
+                    "worker_role": worker_role,
+                    "segment_id": segment.id,
+                    "summary": f"Skipped by planner. primary_worker_path={planned_worker_path}.",
+                    "artifact_files": [],
+                    "output_records": [],
+                    "metadata": {
+                        "dispatch_decision": "skipped_by_plan",
+                        "planned_primary_worker_path": planned_worker_path,
+                    },
+                }
+            )
+            _log_progress(session_id, "dispatch", f"task={task.id} skipped_by_plan")
+            continue
+
         persist_agent_message(
             plan=plan,
             session_id=session_id,
@@ -620,36 +900,40 @@ def run_to_review(
             payload={"progress_label": "start_render"},
         )
 
-        segment_id = _segment_id_from_task(task)
-        segment = _segment_by_id(plan, segment_id)
-
         try:
-            render_result = render_with_worker(plan=plan, segment=segment, task=task)
+            render_result = render_with_worker(
+                plan=plan,
+                segment=segment,
+                task=task,
+                session_id=session_id,
+                shared_context=shared_context,
+                prompt_cache=prompt_cache,
+            )
         except WorkerExecutionError as exc:
-            if worker_role == "manim_worker":
-                render_result = _fallback_manim_result(plan, segment_id, str(exc))
-            else:
-                persist_agent_message(
-                    plan=plan,
-                    session_id=session_id,
-                    event_type=EventType.WORKER_BLOCKER,
-                    role_id=worker_role,
-                    stage=PipelineStage.DISPATCH,
-                    task_id=task.id,
-                    payload={"blocked_reason": str(exc)},
-                )
-                raise RuntimeError(f"render_failed:{task.id}:{exc}") from exc
+            persist_agent_message(
+                plan=plan,
+                session_id=session_id,
+                event_type=EventType.WORKER_BLOCKER,
+                role_id=worker_role,
+                stage=PipelineStage.DISPATCH,
+                task_id=task.id,
+                payload={"blocked_reason": str(exc)},
+            )
+            raise RuntimeError(f"render_failed:{task.id}:{exc}") from exc
 
-        output_paths = _write_required_outputs(
-            plan,
-            session_id,
-            task.id,
-            {
+        output_paths: list[str] = []
+        for output_key in task.required_outputs:
+            payload = {
+                "project_id": plan.project_id,
+                "task_id": task.id,
+                "output_key": output_key,
                 "render_summary": render_result.summary,
                 "artifact_files": render_result.artifact_files,
                 "artifact_metadata": render_result.metadata,
-            },
-        )
+            }
+            output_paths.append(
+                str(write_output_key(plan, session_id, output_key, payload))
+            )
         _complete_task(plan, session_id, task.id, worker_role)
         persist_agent_message(
             plan=plan,
@@ -674,6 +958,11 @@ def run_to_review(
                 "metadata": render_result.metadata,
             }
         )
+        _log_progress(
+            session_id,
+            "dispatch",
+            f"task={task.id} completed artifacts={len(render_result.artifact_files)}",
+        )
 
     review_evidence_path = write_output_key(
         plan=plan,
@@ -684,30 +973,86 @@ def run_to_review(
             "session_id": session_id,
             "render_evidence": render_evidence,
             "checkpoints": [item.to_dict() for item in plan.review_checkpoints],
+            "storyboard_outline": storyboard_outline,
         },
     )
 
-    draft_payload: dict[str, Any] = {
-        "summary": "AI reviewer draft generated. Awaiting human approval.",
+    reviewer_payload = {
+        "project_id": plan.project_id,
+        "title": plan.title,
+        "research_summary": research_summary.strip(),
+        "glossary_terms": glossary_terms,
+        "formula_catalog": formula_catalog,
+        "planner_brief": planner_brief,
+        "storyboard_outline": storyboard_outline,
+        "review_checkpoints": [item.to_dict() for item in plan.review_checkpoints],
+        "render_evidence": render_evidence,
+    }
+    review_error: str | None = None
+    try:
+        review_draft, review_meta = _call_json_role(
+            cfg=cfg,
+            plan=plan,
+            session_id=session_id,
+            role_id="reviewer",
+            stage=PipelineStage.REVIEW,
+            recipe=reviewer_recipe(),
+            payload=reviewer_payload,
+            prompt_cache=prompt_cache,
+        )
+    except LLMRequestError as exc:
+        review_error = str(exc)
+        _log_progress(
+            session_id,
+            "review",
+            f"reviewer json failed once error={review_error}; retry_with_contract_hint",
+        )
+        retry_payload = {
+            **reviewer_payload,
+            "contract_hint": (
+                "Return exactly one JSON object. No markdown, no explanation, no code fence."
+            ),
+        }
+        try:
+            review_draft, review_meta = _call_json_role(
+                cfg=cfg,
+                plan=plan,
+                session_id=session_id,
+                role_id="reviewer",
+                stage=PipelineStage.REVIEW,
+                recipe=reviewer_recipe(),
+                payload=retry_payload,
+                prompt_cache=prompt_cache,
+            )
+            review_error = None
+        except LLMRequestError as retry_exc:
+            review_error = f"{review_error};retry:{retry_exc}"
+            _log_progress(
+                session_id,
+                "review",
+                f"reviewer json failed twice; fallback_draft error={review_error}",
+            )
+            review_draft = {}
+            review_meta = {
+                "endpoint": "fallback",
+                "role_id": "reviewer",
+                "route": "fallback",
+                "provider": "local",
+                "model": "fallback",
+            }
+    if not isinstance(review_draft, dict):
+        review_draft = {}
+    draft_payload = {
+        "summary": str(review_draft.get("summary") or "").strip()
+        or "AI reviewer draft generated. Awaiting human approval.",
         "decision": "pending_human_confirmation",
-        "risk_notes": [],
-        "must_check": [],
+        "risk_notes": _coerce_str_list(review_draft.get("risk_notes"), limit=12),
+        "must_check": _coerce_str_list(review_draft.get("must_check"), limit=12),
+        "evidence_checks": review_draft.get("evidence_checks", []),
         "checkpoints": [item.to_dict() for item in plan.review_checkpoints],
         "evidence_path": str(review_evidence_path),
-        "llm_generation": {"meta": None, "error": None},
+        "llm_generation": {"meta": review_meta, "error": review_error},
     }
-    try:
-        review_draft, review_meta = _generate_review_draft_with_llm(
-            plan=plan,
-            render_evidence=render_evidence,
-        )
-        draft_payload["summary"] = review_draft["summary"]
-        draft_payload["decision"] = review_draft["decision"]
-        draft_payload["risk_notes"] = review_draft["risk_notes"]
-        draft_payload["must_check"] = review_draft["must_check"]
-        draft_payload["llm_generation"] = {"meta": review_meta, "error": None}
-    except (LLMRequestError, ValueError, TypeError, KeyError) as exc:
-        draft_payload["llm_generation"] = {"meta": None, "error": str(exc)}
 
     persist_agent_message(
         plan=plan,
@@ -735,6 +1080,11 @@ def run_to_review(
             "reason": review_task.reason,
             "verification_nudge_needed": review_task.verification_nudge_needed,
         },
+    )
+    _log_progress(
+        session_id,
+        "review",
+        f"review.draft ready status={review_task.to_status} evidence={review_evidence_path}",
     )
 
     return {

@@ -9,10 +9,14 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock3,
+  FileText,
   LayoutDashboard,
   ListTodo,
   Package,
   Pause,
+  Play,
+  PlusCircle,
+  Puzzle,
   Sparkles,
   Zap
 } from 'lucide-react';
@@ -25,9 +29,13 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { href: '/live', label: '总览', icon: LayoutDashboard },
+  { href: '/live/create', label: '新建', icon: PlusCircle },
+  { href: '/live/inputs', label: '输入', icon: FileText },
   { href: '/live/tasks', label: '任务', icon: ListTodo },
+  { href: '/live/execution', label: '执行', icon: Play },
   { href: '/live/review', label: '审核', icon: ClipboardCheck },
   { href: '/live/artifacts', label: '产物', icon: Package },
+  { href: '/live/capabilities', label: '能力', icon: Puzzle },
 ];
 
 export type SidebarData = {

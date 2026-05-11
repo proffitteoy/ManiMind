@@ -29,6 +29,7 @@ EXTERNAL_PATHS = {
     "html_skill_root": "resources/skills/html-animation",
     "hyperframes_root": "resources/references/hyperframes",
     "manim_skill_file": "resources/skills/manim/SKILL.md",
+    "pdf_skill_root": "pdf",
     "docs_root": "docs",
 }
 

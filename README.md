@@ -1,4 +1,4 @@
-# ManiMind
+﻿# ManiMind
 
 ManiMind 是一个面向数学科普动画生产的多 Agent 编排项目。输入论文和笔记，输出可审核的讲解脚本、分镜、Manim 数学动画、HTML 科普片段，以及后续配音、字幕、剪辑拼接所需的结构化产物。
 
@@ -23,6 +23,7 @@ ManiMind/
 ├─ frontend/
 ├─ configs/
 ├─ scripts/
+├─ pdf/
 ├─ src/manimind/
 ├─ manim-worker-pov/
 ├─ tests/
@@ -85,12 +86,41 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 - `agent-message <manifest.json> <event_type> <role_id> <stage> --payload '{...}'`：写入 `worker.progress / worker.blocker / worker.result / review.decision` 结构化消息。
 - `run-to-review <manifest.json>`：执行 ingest/summarize/plan/dispatch，并推进到 `review`。
 - `human-review <manifest.json> approve|return`：人工审核放行或打回。
-- `finalize <manifest.json> --tts-provider powershell_sapi|command|noop`：审核通过后执行后处理并完成打包。
+- `finalize <manifest.json> --tts-provider powershell_sapi|command|f5_tts|noop`：审核通过后执行后处理并完成打包。
 - `finalize` 会尝试调用 `ffmpeg` 合并 `manim` 片段，生成 `outputs/<project_id>/video/segments-merged.mp4`；若有真实 wav 配音会继续生成 `final-with-audio.mp4`。
 - `context-pack` 默认会阻断角色非法阶段请求；需要显式放行时使用 `--allow-disallowed-stage`。
 - 三个命令支持 `--session-id`，并会把状态与事件日志落盘到 `runtime/projects/<project_id>/` 与 `runtime/sessions/<session_id>/`。
+- 进度日志默认开启（stderr 输出），可用 `MANIMIND_PROGRESS_LOG=0` 关闭。
+- F5-TTS 子进程日志默认实时透传（前缀 `[f5_tts]`）；可用 `MANIMIND_F5_LIVE_LOG=0` 关闭。
 
-### LLM 配置（Responses API）
+### F5-TTS 固定参考音频（项目内缓存）
+
+默认约定把参考音频放在：
+
+- `runtime/projects/<project_id>/voice/selena_reference.m4a`
+
+这样参考音频不会暴露在仓库根目录。模型缓存也固定在项目内：
+
+- `runtime/projects/<project_id>/voice/hf-cache/`
+
+使用一键脚本触发 `finalize + f5-tts`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\finalize-with-f5-tts.ps1 `
+  -Manifest configs/max-function-review-demo.json `
+  -ProjectId max-function-review-demo `
+  -RemoveSilence
+```
+
+可选参数：
+
+- `-ReferenceAudio`：覆盖默认参考音频路径
+- `-ReferenceText`：提供参考音频文本（不填则自动转写）
+- `-SessionId`：指定会话 ID
+- `-HfCacheRoot`：指定已有 HuggingFace 缓存根目录（可复用本地已下载权重）
+- `-PythonExe` / `-FfmpegExe`：覆盖本机工具路径
+
+### LLM 配置（Responses / Chat Completions）
 
 如需启用真实模型推理，至少配置：
 
@@ -101,17 +131,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 可选配置：
 
 - `MANIMIND_REVIEW_MODEL`（默认同 `MANIMIND_MODEL`）
+- `MANIMIND_REVIEW_API_KEY`（默认复用 `OPENAI_API_KEY`）
+- `MANIMIND_REVIEW_MODEL_BASE_URL`（默认复用 `MANIMIND_MODEL_BASE_URL`）
+- `MANIMIND_MODEL_WIRE_API`（`responses` 或 `chat_completions`，默认 `responses`）
+- `MANIMIND_REVIEW_MODEL_WIRE_API`（默认跟随主路由）
 - `MANIMIND_MODEL_PROVIDER`（默认 `apipool`）
 - `MANIMIND_MODEL_REASONING_EFFORT`（如 `xhigh`）
 - `MANIMIND_MODEL_SUPPORTS_REASONING_SUMMARIES`（`true/false`）
 - `MANIMIND_DISABLE_RESPONSE_STORAGE`（`true/false`）
-- `MANIMIND_FAST_MODEL`（失败回退模型，默认 `deepseekv4flash`）
-- `MANIMIND_FAST_API_KEY`（回退模型 key）
-- `MANIMIND_FAST_MODEL_BASE_URL`（回退模型独立 base URL；例如 DeepSeek 官方可设为 `https://api.deepseek.com`）
+- `MANIMIND_WORKER_MODEL`（例如 `deepseekv4flash`）
+- `MANIMIND_WORKER_API_KEY`（worker / planner / coordinator / renderer 路由的 API key）
+- `MANIMIND_WORKER_MODEL_BASE_URL`（默认复用 `MANIMIND_MODEL_BASE_URL`）
+- `MANIMIND_WORKER_MODEL_WIRE_API`（`responses` 或 `chat_completions`）
+- `MANIMIND_WORKER_MODEL_REASONING_EFFORT`
+- `MANIMIND_WORKER_MODEL_SUPPORTS_REASONING_SUMMARIES`
 
 说明：
 
 - `deepseekv4flash` 会自动规范化为 `deepseek-v4-flash`。
+- 主链路已移除模型回退逻辑；`primary / review / worker` 三条路由都使用显式配置。
 
 ## Web API 骨架（新增）
 
@@ -130,21 +168,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 - 启动示例（安装 `api` 依赖后）：
 
 ```powershell
-& 'C:\Users\84025\AppData\Local\Programs\Python\Python312\python.exe' -m pip install -e ".[api]"
-& 'C:\Users\84025\AppData\Local\Programs\Python\Python312\python.exe' -m uvicorn backend.main:app --reload
+python -m pip install -e ".[api]"
+python -m uvicorn backend.main:app --reload
 ```
+
+如本机命令名不是 `python`，请替换为对应解释器。
 
 ## 前端控制台骨架（新增）
 
 - 新增目录：`frontend/manimind-console/`
 - 技术栈：`Next.js 16 + React 19 + Tailwind CSS 4`
 - 当前作用：先验证控制台首页的信息结构、模块边界和后续 API 接线点
-- 当前数据：静态 mock 数据，后续替换为 `backend/` 的项目、任务、上下文和事件接口
+- 当前数据：`/live` 已接入 `backend/` 的项目、任务、上下文、审核证据和产物接口；`/mock` 仅保留为静态演示页
 
 启动示例：
 
 ```powershell
-cd F:\ManiMind\frontend\manimind-console
+cd frontend\manimind-console
 npm install
 npm run dev
 ```
@@ -152,6 +192,7 @@ npm run dev
 ## 文档入口
 
 - [docs/README.md](./docs/README.md)
+- [docs/角色职责与能力分发说明.md](./docs/角色职责与能力分发说明.md)
 - [docs/前端控制台骨架方案.md](./docs/前端控制台骨架方案.md)
 - [docs/阶段1计划.md](./docs/阶段1计划.md)
 - [docs/通用项目架构模板.md](./docs/通用项目架构模板.md)
@@ -163,3 +204,4 @@ npm run dev
 
 - `manim-worker-pov/`：Manim Worker 最小验证闭环（固定 spec -> 代码生成 -> 渲染 -> 日志修复）。
 - 当前定位是独立 POC，用于验证 worker 侧协议与渲染修复，不视为 `src/manimind/` 已接入的正式执行器。
+

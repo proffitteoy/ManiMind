@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import os
+import sys
 from typing import Any
 
 from .artifact_store import has_output_key, write_output_key
@@ -12,6 +15,18 @@ from .runtime_store import (
     persist_task_update,
 )
 from .task_board import update_execution_task_status
+
+
+def _log_review(session_id: str, step: str, message: str) -> None:
+    raw = os.environ.get("MANIMIND_PROGRESS_LOG", "1").strip().lower()
+    if raw in {"0", "false", "off", "no"}:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(
+        f"[manimind][{stamp}][session={session_id}][review-{step}] {message}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def apply_human_review_decision(
@@ -27,10 +42,12 @@ def apply_human_review_decision(
 ) -> dict[str, Any]:
     """应用人工审核决定：approve 或 return。"""
     normalized = decision.strip().lower()
+    _log_review(session_id, "decision", f"received decision={normalized}")
     if normalized not in {"approve", "approved", "return"}:
         raise ValueError(f"unsupported_review_decision:{decision}")
 
     if normalized in {"approve", "approved"}:
+        _log_review(session_id, "approve", "writing review report")
         report_path = write_output_key(
             plan=plan,
             session_id=session_id,
@@ -75,12 +92,14 @@ def apply_human_review_decision(
         )
         if not result.success:
             raise RuntimeError(f"review_complete_failed:{result.reason}")
+        _log_review(session_id, "approve", "review.outputs completed")
         return {
             "decision": "approved",
             "review_report": str(report_path),
             "review_task_status": result.to_status,
         }
 
+    _log_review(session_id, "return", "persisting return packet")
     return_payload = {
         "reason": reason or "manual return",
         "must_fix": must_fix or "",
@@ -105,6 +124,7 @@ def apply_human_review_decision(
             "reason": return_payload["reason"],
         },
     )
+    _log_review(session_id, "return", "return packet persisted")
     return {
         "decision": "return",
         **return_paths,

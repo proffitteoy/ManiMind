@@ -1,423 +1,423 @@
-{
-  "nodes": [
-    {
-      "id": "title",
-      "type": "text",
-      "x": 120,
-      "y": -640,
-      "width": 560,
-      "height": 100,
-      "text": "# ManiMind 架构白板\n\n编排内核、状态落盘、外部能力边界"
-    },
-    {
-      "id": "group-input",
-      "type": "group",
-      "x": -1440,
-      "y": -420,
-      "width": 380,
-      "height": 660,
-      "label": "输入与约束"
-    },
-    {
-      "id": "group-entry",
-      "type": "group",
-      "x": -930,
-      "y": -420,
-      "width": 410,
-      "height": 940,
-      "label": "CLI 与编排入口"
-    },
-    {
-      "id": "group-core",
-      "type": "group",
-      "x": -360,
-      "y": -420,
-      "width": 960,
-      "height": 1160,
-      "label": "编排核心"
-    },
-    {
-      "id": "group-runtime",
-      "type": "group",
-      "x": 700,
-      "y": -420,
-      "width": 980,
-      "height": 920,
-      "label": "状态与产物"
-    },
-    {
-      "id": "group-external",
-      "type": "group",
-      "x": 1780,
-      "y": -420,
-      "width": 420,
-      "height": 660,
-      "label": "第三方能力"
-    },
-    {
-      "id": "node-manifest",
-      "type": "text",
-      "x": -1390,
-      "y": -320,
-      "width": 300,
-      "height": 160,
-      "text": "# Manifest\n\n- `project_id / segments`\n- `audience / style`\n- `inputs`"
-    },
-    {
-      "id": "node-docs",
-      "type": "text",
-      "x": -1390,
-      "y": -100,
-      "width": 300,
-      "height": 210,
-      "text": "# 约束文档\n\n- `AGENTS.md`\n- `强前置条件约束.md`\n- `通用项目架构模板.md`",
-      "color": "6"
-    },
-    {
-      "id": "node-main",
-      "type": "text",
-      "x": -880,
-      "y": -320,
-      "width": 300,
-      "height": 190,
-      "text": "# main.py\n\n- `plan`\n- `context-pack`\n- `task-update`\n- `--session-id`",
-      "color": "1"
-    },
-    {
-      "id": "node-bootstrap",
-      "type": "text",
-      "x": -880,
-      "y": -40,
-      "width": 300,
-      "height": 150,
-      "text": "# bootstrap.py\n\n- 路径蓝图\n- 依赖检查\n- 参考归档检查",
-      "color": "2"
-    },
-    {
-      "id": "node-backend-api",
-      "type": "text",
-      "x": -880,
-      "y": 160,
-      "width": 300,
-      "height": 180,
-      "text": "# backend API\n\n- `projects` 路由\n- `tasks` 路由\n- `contexts` 路由\n- 复用编排内核",
-      "color": "4"
-    },
-    {
-      "id": "node-frontend-console",
-      "type": "text",
-      "x": -880,
-      "y": 390,
-      "width": 300,
-      "height": 200,
-      "text": "# frontend/manimind-console\n\n- Next.js 控制台骨架\n- dashboard 首页\n- mock 数据到 API 映射\n- 只经 backend API 读写",
-      "color": "4"
-    },
-    {
-      "id": "node-models",
-      "type": "text",
-      "x": -300,
-      "y": -320,
-      "width": 320,
-      "height": 210,
-      "text": "# models.py\n\n- `PipelineStage`\n- `AgentMode`\n- `ContextRecord`\n- `ExecutionTask`\n- `ProjectPlan`"
-    },
-    {
-      "id": "node-roles",
-      "type": "text",
-      "x": -300,
-      "y": 40,
-      "width": 320,
-      "height": 230,
-      "text": "# 角色分布\n\n- `lead`\n- `explorer / planner`\n- `coordinator`\n- `html / manim / svg_worker`\n- `reviewer`",
-      "color": "2"
-    },
-    {
-      "id": "node-workflow",
-      "type": "text",
-      "x": 160,
-      "y": -340,
-      "width": 340,
-      "height": 210,
-      "text": "# workflow.py\n\n- `context blueprint`\n- `agent profiles`\n- `execution DAG`\n- `review checkpoints`",
-      "color": "4"
-    },
-    {
-      "id": "node-context",
-      "type": "text",
-      "x": 160,
-      "y": -60,
-      "width": 340,
-      "height": 190,
-      "text": "# context_assembly.py\n\n- `context packet`\n- `write targets`\n- 静态/动态上下文装配\n- `section cache`",
-      "color": "5"
-    },
-    {
-      "id": "node-taskboard",
-      "type": "text",
-      "x": 160,
-      "y": 200,
-      "width": 340,
-      "height": 190,
-      "text": "# task_board.py\n\n- `owner check`\n- `blocker check`\n- `review gate`\n- `verification nudge`",
-      "color": "3"
-    },
-    {
-      "id": "node-runtime-store",
-      "type": "text",
-      "x": 160,
-      "y": 460,
-      "width": 340,
-      "height": 180,
-      "text": "# runtime_store.py\n\n- 静态快照写入\n- 动态 `context packet`\n- 动态 `task update`\n- `events.jsonl`",
-      "color": "1"
-    },
-    {
-      "id": "node-runtime-module",
-      "type": "text",
-      "x": -300,
-      "y": 360,
-      "width": 320,
-      "height": 180,
-      "text": "# runtime.py\n\n- `ProjectRuntime`\n- `load_project_runtime`\n- `apply_runtime_snapshot`\n- `derive_current_stage`",
-      "color": "3"
-    },
-    {
-      "id": "node-project-runtime",
-      "type": "text",
-      "x": 770,
-      "y": -320,
-      "width": 360,
-      "height": 230,
-      "text": "# Project Runtime\n\n`runtime/projects/<project_id>/`\n\n- 静态事实：`context-records.json`\n- 运行状态：`state.json` / `execution-tasks.json`\n- 计划快照：`project-plan.json`\n- 审计：`events.jsonl`"
-    },
-    {
-      "id": "node-session-runtime",
-      "type": "text",
-      "x": 1210,
-      "y": -320,
-      "width": 360,
-      "height": 220,
-      "text": "# Session Runtime\n\n`runtime/sessions/<session_id>/`\n\n- 协作链路：`context-packets/*.json`\n- 状态推进：`task-updates/*.json`\n- 最近快照：`*-latest.json`\n- 审计：`events.jsonl`"
-    },
-    {
-      "id": "node-outputs",
-      "type": "text",
-      "x": 770,
-      "y": 20,
-      "width": 360,
-      "height": 150,
-      "text": "# Outputs\n\n`outputs/<project_id>/`\n\n- 交付物清单\n- 媒体产物引用",
-      "color": "4"
-    },
-    {
-      "id": "node-sync-rule",
-      "type": "text",
-      "x": 770,
-      "y": 250,
-      "width": 800,
-      "height": 190,
-      "text": "# 维护规则\n\n- 模块边界、角色分布、状态路径、上下文链路、外部能力接入变化都算结构变更\n- 结构变更必须同步更新 `docs/architecture.canvas`\n- 同步更新 `docs/通用项目架构模板.md`",
-      "color": "6"
-    },
-    {
-      "id": "node-external-capabilities",
-      "type": "text",
-      "x": 1830,
-      "y": -300,
-      "width": 320,
-      "height": 340,
-      "text": "# 外部能力目录\n\n- `resources/skills/html-animation/`\n- `resources/references/hyperframes/`\n- `resources/skills/manim/SKILL.md`\n\n只引用，不在仓库内重写",
-      "color": "5"
-    }
-  ],
-  "edges": [
-    {
-      "id": "edge-manifest-main",
-      "fromNode": "node-manifest",
-      "toNode": "node-main",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "输入"
-    },
-    {
-      "id": "edge-docs-main",
-      "fromNode": "node-docs",
-      "toNode": "node-main",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "edge-main-bootstrap",
-      "fromNode": "node-main",
-      "toNode": "node-bootstrap",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "label": "初始化"
-    },
-    {
-      "id": "edge-main-workflow",
-      "fromNode": "node-main",
-      "toNode": "node-workflow",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "plan"
-    },
-    {
-      "id": "edge-main-context",
-      "fromNode": "node-main",
-      "toNode": "node-context",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "context-pack"
-    },
-    {
-      "id": "edge-main-taskboard",
-      "fromNode": "node-main",
-      "toNode": "node-taskboard",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "task-update"
-    },
-    {
-      "id": "edge-manifest-backend",
-      "fromNode": "node-manifest",
-      "toNode": "node-backend-api",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "API payload"
-    },
-    {
-      "id": "edge-docs-frontend",
-      "fromNode": "node-docs",
-      "toNode": "node-frontend-console",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "edge-frontend-backend",
-      "fromNode": "node-frontend-console",
-      "toNode": "node-backend-api",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "label": "REST / SSE"
-    },
-    {
-      "id": "edge-backend-workflow",
-      "fromNode": "node-backend-api",
-      "toNode": "node-workflow",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "edge-backend-context",
-      "fromNode": "node-backend-api",
-      "toNode": "node-context",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "edge-backend-taskboard",
-      "fromNode": "node-backend-api",
-      "toNode": "node-taskboard",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "edge-workflow-models",
-      "fromNode": "node-workflow",
-      "toNode": "node-models",
-      "fromSide": "left",
-      "toSide": "right"
-    },
-    {
-      "id": "edge-context-models",
-      "fromNode": "node-context",
-      "toNode": "node-models",
-      "fromSide": "left",
-      "toSide": "right"
-    },
-    {
-      "id": "edge-taskboard-models",
-      "fromNode": "node-taskboard",
-      "toNode": "node-models",
-      "fromSide": "left",
-      "toSide": "right"
-    },
-    {
-      "id": "edge-runtime-module-models",
-      "fromNode": "node-runtime-module",
-      "toNode": "node-models",
-      "fromSide": "top",
-      "toSide": "bottom"
-    },
-    {
-      "id": "edge-runtime-store-runtime-module",
-      "fromNode": "node-runtime-store",
-      "toNode": "node-runtime-module",
-      "fromSide": "left",
-      "toSide": "right"
-    },
-    {
-      "id": "edge-workflow-roles",
-      "fromNode": "node-workflow",
-      "toNode": "node-roles",
-      "fromSide": "left",
-      "toSide": "right",
-      "label": "定义角色"
-    },
-    {
-      "id": "edge-workflow-runtime-store",
-      "fromNode": "node-workflow",
-      "toNode": "node-runtime-store",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "edge-context-runtime-store",
-      "fromNode": "node-context",
-      "toNode": "node-runtime-store",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "edge-taskboard-runtime-store",
-      "fromNode": "node-taskboard",
-      "toNode": "node-runtime-store",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "edge-runtime-store-project-runtime",
-      "fromNode": "node-runtime-store",
-      "toNode": "node-project-runtime",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "项目状态"
-    },
-    {
-      "id": "edge-runtime-store-session-runtime",
-      "fromNode": "node-runtime-store",
-      "toNode": "node-session-runtime",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "会话状态"
-    },
-    {
-      "id": "edge-runtime-store-outputs",
-      "fromNode": "node-runtime-store",
-      "toNode": "node-outputs",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "产物引用"
-    },
-    {
-      "id": "edge-bootstrap-external",
-      "fromNode": "node-bootstrap",
-      "toNode": "node-external-capabilities",
-      "fromSide": "right",
-      "toSide": "left",
-      "label": "检查引用"
-    }
-  ]
+﻿{
+    "nodes":  [
+                  {
+                      "id":  "title",
+                      "type":  "text",
+                      "x":  120,
+                      "y":  -640,
+                      "width":  560,
+                      "height":  100,
+                      "text":  "# ManiMind 架构白板\n\n编排内核、状态落盘、外部能力边界"
+                  },
+                  {
+                      "id":  "group-input",
+                      "type":  "group",
+                      "x":  -1440,
+                      "y":  -420,
+                      "width":  380,
+                      "height":  660,
+                      "label":  "输入与约束"
+                  },
+                  {
+                      "id":  "group-entry",
+                      "type":  "group",
+                      "x":  -930,
+                      "y":  -420,
+                      "width":  410,
+                      "height":  940,
+                      "label":  "CLI 与编排入口"
+                  },
+                  {
+                      "id":  "group-core",
+                      "type":  "group",
+                      "x":  -360,
+                      "y":  -420,
+                      "width":  960,
+                      "height":  1160,
+                      "label":  "编排核心"
+                  },
+                  {
+                      "id":  "group-runtime",
+                      "type":  "group",
+                      "x":  700,
+                      "y":  -420,
+                      "width":  980,
+                      "height":  920,
+                      "label":  "状态与产物"
+                  },
+                  {
+                      "id":  "group-external",
+                      "type":  "group",
+                      "x":  1780,
+                      "y":  -420,
+                      "width":  420,
+                      "height":  660,
+                      "label":  "第三方能力"
+                  },
+                  {
+                      "id":  "node-manifest",
+                      "type":  "text",
+                      "x":  -1390,
+                      "y":  -320,
+                      "width":  300,
+                      "height":  160,
+                      "text":  "# Manifest\n\n- `project_id / segments`\n- `audience / style`\n- `inputs`"
+                  },
+                  {
+                      "id":  "node-docs",
+                      "type":  "text",
+                      "x":  -1390,
+                      "y":  -100,
+                      "width":  300,
+                      "height":  210,
+                      "text":  "# 约束文档\n\n- `AGENTS.md`\n- `强前置条件约束.md`\n- `通用项目架构模板.md`",
+                      "color":  "6"
+                  },
+                  {
+                      "id":  "node-main",
+                      "type":  "text",
+                      "x":  -880,
+                      "y":  -320,
+                      "width":  300,
+                      "height":  190,
+                      "text":  "# main.py\n\n- `plan`\n- `context-pack`\n- `task-update`\n- `--session-id`",
+                      "color":  "1"
+                  },
+                  {
+                      "id":  "node-bootstrap",
+                      "type":  "text",
+                      "x":  -880,
+                      "y":  -40,
+                      "width":  300,
+                      "height":  150,
+                      "text":  "# bootstrap.py\n\n- 路径蓝图\n- 依赖检查\n- 参考归档检查",
+                      "color":  "2"
+                  },
+                  {
+                      "id":  "node-backend-api",
+                      "type":  "text",
+                      "x":  -880,
+                      "y":  160,
+                      "width":  300,
+                      "height":  180,
+                      "text":  "# backend API\n\n- `projects` 路由\n- `tasks` 路由\n- `contexts` 路由\n- 复用编排内核",
+                      "color":  "4"
+                  },
+                  {
+                      "id":  "node-frontend-console",
+                      "type":  "text",
+                      "x":  -880,
+                      "y":  390,
+                      "width":  300,
+                      "height":  200,
+                      "text":  "# frontend/manimind-console\n\n- Next.js live console\n- overview / tasks / review / artifacts\n- real backend API data\n- /mock only for static demo",
+                      "color":  "4"
+                  },
+                  {
+                      "id":  "node-models",
+                      "type":  "text",
+                      "x":  -300,
+                      "y":  -320,
+                      "width":  320,
+                      "height":  210,
+                      "text":  "# models.py\n\n- `PipelineStage`\n- `AgentMode`\n- `ContextRecord`\n- `ExecutionTask`\n- `ProjectPlan`"
+                  },
+                  {
+                      "id":  "node-roles",
+                      "type":  "text",
+                      "x":  -300,
+                      "y":  40,
+                      "width":  320,
+                      "height":  230,
+                      "text":  "# 角色分布\n\n- `lead`\n- `explorer / planner`\n- `coordinator`\n- `html / manim / svg_worker`\n- `reviewer / human_reviewer`",
+                      "color":  "2"
+                  },
+                  {
+                      "id":  "node-workflow",
+                      "type":  "text",
+                      "x":  160,
+                      "y":  -340,
+                      "width":  340,
+                      "height":  210,
+                      "text":  "# workflow.py\n\n- `context blueprint`\n- `agent profiles`\n- `execution DAG`\n- `media routing`\n- `review checkpoints`",
+                      "color":  "4"
+                  },
+                  {
+                      "id":  "node-context",
+                      "type":  "text",
+                      "x":  160,
+                      "y":  -60,
+                      "width":  340,
+                      "height":  190,
+                      "text":  "# context_assembly.py + prompt_system.py\n\n- context packet\n- prompt sections + role recipes\n- static / dynamic context assembly\n- capability refs / timing refs\n- section cache",
+                      "color":  "5"
+                  },
+                  {
+                      "id":  "node-taskboard",
+                      "type":  "text",
+                      "x":  160,
+                      "y":  200,
+                      "width":  340,
+                      "height":  190,
+                      "text":  "# task_board.py\n\n- `owner check`\n- `blocker check`\n- `review gate`\n- `verification nudge`",
+                      "color":  "3"
+                  },
+                  {
+                      "id":  "node-runtime-store",
+                      "type":  "text",
+                      "x":  160,
+                      "y":  460,
+                      "width":  340,
+                      "height":  180,
+                      "text":  "# runtime_store.py\n\n- 静态快照写入\n- 动态 `context packet`\n- 动态 `task update`\n- `events.jsonl`",
+                      "color":  "1"
+                  },
+                  {
+                      "id":  "node-runtime-module",
+                      "type":  "text",
+                      "x":  -300,
+                      "y":  360,
+                      "width":  320,
+                      "height":  180,
+                      "text":  "# runtime.py\n\n- `ProjectRuntime`\n- `load_project_runtime`\n- `apply_runtime_snapshot`\n- `derive_current_stage`",
+                      "color":  "3"
+                  },
+                  {
+                      "id":  "node-project-runtime",
+                      "type":  "text",
+                      "x":  770,
+                      "y":  -320,
+                      "width":  360,
+                      "height":  230,
+                      "text":  "# Project Runtime\n\n`runtime/projects/\u003cproject_id\u003e/`\n\n- 静态事实：`context-records.json`\n- 运行状态：`state.json` / `execution-tasks.json`\n- 计划快照：`project-plan.json`\n- 审计：`events.jsonl`"
+                  },
+                  {
+                      "id":  "node-session-runtime",
+                      "type":  "text",
+                      "x":  1210,
+                      "y":  -320,
+                      "width":  360,
+                      "height":  220,
+                      "text":  "# Session Runtime\n\n`runtime/sessions/\u003csession_id\u003e/`\n\n- 协作链路：`context-packets/*.json`\n- 状态推进：`task-updates/*.json`\n- 最近快照：`*-latest.json`\n- 审计：`events.jsonl`"
+                  },
+                  {
+                      "id":  "node-outputs",
+                      "type":  "text",
+                      "x":  770,
+                      "y":  20,
+                      "width":  360,
+                      "height":  150,
+                      "text":  "# Outputs\n\noutputs/\u003cproject_id\u003e/\n\n- approved artifacts\n- subtitles / audio / final video\n- timing manifest (next round)\n- asset manifest",
+                      "color":  "4"
+                  },
+                  {
+                      "id":  "node-sync-rule",
+                      "type":  "text",
+                      "x":  770,
+                      "y":  250,
+                      "width":  800,
+                      "height":  190,
+                      "text":  "# 维护规则\n\n- 模块边界、角色分布、状态路径、上下文链路、外部能力接入变化都算结构变更\n- 首跑反馈已追加三项待实现约束：音频前置、媒介路由收敛、引子/桥接覆盖\n- 结构变更必须同步更新 `docs/architecture.canvas`\n- 同步更新 `docs/通用项目架构模板.md`",
+                      "color":  "6"
+                  },
+                  {
+                      "id":  "node-external-capabilities",
+                      "type":  "text",
+                      "x":  1830,
+                      "y":  -300,
+                      "width":  320,
+                      "height":  340,
+                      "text":  "# 外部能力目录\n\n- `pdf/` -> ingest 增强\n- `resources/skills/html-animation/`\n- `resources/references/hyperframes/`\n- `resources/skills/manim/SKILL.md`\n\n按 ingest / workers 分发，只引用，不在仓库内重写",
+                      "color":  "5"
+                  }
+              ],
+    "edges":  [
+                  {
+                      "id":  "edge-manifest-main",
+                      "fromNode":  "node-manifest",
+                      "toNode":  "node-main",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "输入"
+                  },
+                  {
+                      "id":  "edge-docs-main",
+                      "fromNode":  "node-docs",
+                      "toNode":  "node-main",
+                      "fromSide":  "right",
+                      "toSide":  "left"
+                  },
+                  {
+                      "id":  "edge-main-bootstrap",
+                      "fromNode":  "node-main",
+                      "toNode":  "node-bootstrap",
+                      "fromSide":  "bottom",
+                      "toSide":  "top",
+                      "label":  "初始化"
+                  },
+                  {
+                      "id":  "edge-main-workflow",
+                      "fromNode":  "node-main",
+                      "toNode":  "node-workflow",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "plan"
+                  },
+                  {
+                      "id":  "edge-main-context",
+                      "fromNode":  "node-main",
+                      "toNode":  "node-context",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "context-pack"
+                  },
+                  {
+                      "id":  "edge-main-taskboard",
+                      "fromNode":  "node-main",
+                      "toNode":  "node-taskboard",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "task-update"
+                  },
+                  {
+                      "id":  "edge-manifest-backend",
+                      "fromNode":  "node-manifest",
+                      "toNode":  "node-backend-api",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "API payload"
+                  },
+                  {
+                      "id":  "edge-docs-frontend",
+                      "fromNode":  "node-docs",
+                      "toNode":  "node-frontend-console",
+                      "fromSide":  "right",
+                      "toSide":  "left"
+                  },
+                  {
+                      "id":  "edge-frontend-backend",
+                      "fromNode":  "node-frontend-console",
+                      "toNode":  "node-backend-api",
+                      "fromSide":  "top",
+                      "toSide":  "bottom",
+                      "label":  "REST / SSE"
+                  },
+                  {
+                      "id":  "edge-backend-workflow",
+                      "fromNode":  "node-backend-api",
+                      "toNode":  "node-workflow",
+                      "fromSide":  "right",
+                      "toSide":  "left"
+                  },
+                  {
+                      "id":  "edge-backend-context",
+                      "fromNode":  "node-backend-api",
+                      "toNode":  "node-context",
+                      "fromSide":  "right",
+                      "toSide":  "left"
+                  },
+                  {
+                      "id":  "edge-backend-taskboard",
+                      "fromNode":  "node-backend-api",
+                      "toNode":  "node-taskboard",
+                      "fromSide":  "right",
+                      "toSide":  "left"
+                  },
+                  {
+                      "id":  "edge-workflow-models",
+                      "fromNode":  "node-workflow",
+                      "toNode":  "node-models",
+                      "fromSide":  "left",
+                      "toSide":  "right"
+                  },
+                  {
+                      "id":  "edge-context-models",
+                      "fromNode":  "node-context",
+                      "toNode":  "node-models",
+                      "fromSide":  "left",
+                      "toSide":  "right"
+                  },
+                  {
+                      "id":  "edge-taskboard-models",
+                      "fromNode":  "node-taskboard",
+                      "toNode":  "node-models",
+                      "fromSide":  "left",
+                      "toSide":  "right"
+                  },
+                  {
+                      "id":  "edge-runtime-module-models",
+                      "fromNode":  "node-runtime-module",
+                      "toNode":  "node-models",
+                      "fromSide":  "top",
+                      "toSide":  "bottom"
+                  },
+                  {
+                      "id":  "edge-runtime-store-runtime-module",
+                      "fromNode":  "node-runtime-store",
+                      "toNode":  "node-runtime-module",
+                      "fromSide":  "left",
+                      "toSide":  "right"
+                  },
+                  {
+                      "id":  "edge-workflow-roles",
+                      "fromNode":  "node-workflow",
+                      "toNode":  "node-roles",
+                      "fromSide":  "left",
+                      "toSide":  "right",
+                      "label":  "定义角色"
+                  },
+                  {
+                      "id":  "edge-workflow-runtime-store",
+                      "fromNode":  "node-workflow",
+                      "toNode":  "node-runtime-store",
+                      "fromSide":  "bottom",
+                      "toSide":  "top"
+                  },
+                  {
+                      "id":  "edge-context-runtime-store",
+                      "fromNode":  "node-context",
+                      "toNode":  "node-runtime-store",
+                      "fromSide":  "bottom",
+                      "toSide":  "top"
+                  },
+                  {
+                      "id":  "edge-taskboard-runtime-store",
+                      "fromNode":  "node-taskboard",
+                      "toNode":  "node-runtime-store",
+                      "fromSide":  "bottom",
+                      "toSide":  "top"
+                  },
+                  {
+                      "id":  "edge-runtime-store-project-runtime",
+                      "fromNode":  "node-runtime-store",
+                      "toNode":  "node-project-runtime",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "项目状态"
+                  },
+                  {
+                      "id":  "edge-runtime-store-session-runtime",
+                      "fromNode":  "node-runtime-store",
+                      "toNode":  "node-session-runtime",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "会话状态"
+                  },
+                  {
+                      "id":  "edge-runtime-store-outputs",
+                      "fromNode":  "node-runtime-store",
+                      "toNode":  "node-outputs",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "产物引用"
+                  },
+                  {
+                      "id":  "edge-bootstrap-external",
+                      "fromNode":  "node-bootstrap",
+                      "toNode":  "node-external-capabilities",
+                      "fromSide":  "right",
+                      "toSide":  "left",
+                      "label":  "检查引用"
+                  }
+              ]
 }

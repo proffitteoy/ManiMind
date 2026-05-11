@@ -446,6 +446,7 @@ def build_execution_tasks(
                 f"{project_id}.research.summary",
                 f"{project_id}.glossary",
                 f"{project_id}.formula.catalog",
+                f"{project_id}.style.guide",
             ],
         ),
         ExecutionTask(

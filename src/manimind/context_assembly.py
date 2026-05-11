@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .bootstrap import sanitize_identifier
+from .capability_registry import build_capability_summaries, capabilities_for_role
 from .models import AgentMode, ContextRecord, ContextScope, PipelineStage, ProjectPlan
 
 
@@ -170,6 +171,9 @@ def build_context_packet(
                 else:
                     human_feedback = payload
 
+    role_caps = capabilities_for_role(role_id, stage.value)
+    cap_refs = [cap.to_dict() for cap in role_caps]
+
     return {
         "project_id": plan.project_id,
         "role_id": profile.id,
@@ -184,6 +188,7 @@ def build_context_packet(
         "constraints": constraints,
         "runtime_layout": plan.runtime_layout.to_dict(),
         "human_feedback": human_feedback,
+        "capability_refs": cap_refs,
     }
 
 
@@ -238,10 +243,20 @@ def build_default_prompt_sections(packet: dict[str, object]) -> list[PromptSecti
         lines = [f"- {rule}" for rule in packet["constraints"]]  # type: ignore[index]
         return "硬约束：\n" + "\n".join(lines)
 
+    def _capability_section() -> str | None:
+        caps = packet.get("capability_refs")
+        if not caps:
+            return None
+        role_id = str(packet["role_id"])
+        stage = str(packet["stage"])
+        text = build_capability_summaries(role_id, stage)
+        return text or None
+
     return [
         section("role", _role_section),
         volatile_section("human_review_feedback", _human_feedback_section),
         section("context", _context_section),
+        section("capabilities", _capability_section),
         section("output", _output_section),
         volatile_section("guardrails", _guardrail_section),
     ]

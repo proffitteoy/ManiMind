@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(npx next *)",
+      "Bash(python -m pytest tests/test_capability_and_input.py -v)",
+      "Bash(python -m pytest tests/ -q)"
+    ]
+  }
+}

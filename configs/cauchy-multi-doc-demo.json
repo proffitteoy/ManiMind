@@ -1,0 +1,72 @@
+{
+  "project_id": "cauchy-multi-doc-demo",
+  "title": "柯西反向归纳法（多文档输入示例）",
+  "source_bundle": {
+    "paper_path": "tests/柯西的反向归纳法.md",
+    "note_paths": [],
+    "audience": "数学本科生",
+    "style_refs": ["3b1b"],
+    "documents": [
+      {
+        "path": "tests/柯西的反向归纳法.md",
+        "role": "raw_material",
+        "title": "原始论文笔记",
+        "consumer_roles": ["lead", "explorer"],
+        "notes": "包含完整的柯西反向归纳法证明过程"
+      },
+      {
+        "path": "docs/角色职责与能力分发说明.md",
+        "role": "arrangement_guide",
+        "title": "编排建议",
+        "consumer_roles": ["coordinator", "planner"],
+        "notes": "参考角色分发规则来组织分镜"
+      }
+    ]
+  },
+  "segments": [
+    {
+      "id": "seg-intro-cauchy",
+      "title": "引入：为什么需要反向归纳",
+      "goal": "用直觉引入反向归纳法的动机",
+      "narration": "在数学中，我们通常用数学归纳法从小到大证明命题。但柯西发现了一种巧妙的反向策略...",
+      "modality": "html",
+      "formulas": [],
+      "html_motion_notes": ["渐入标题", "时间线动画展示归纳方向"],
+      "requires_svg_motion": false,
+      "estimated_seconds": 30
+    },
+    {
+      "id": "seg-amgm-core",
+      "title": "核心：AM-GM 不等式的反向归纳证明",
+      "goal": "展示柯西如何用反向归纳证明 AM-GM",
+      "narration": "柯西的策略分两步：先证明 n=2^k 的情况，再从 n 推回 n-1...",
+      "modality": "manim",
+      "formulas": ["\\frac{a_1+a_2+\\cdots+a_n}{n} \\geq \\sqrt[n]{a_1 a_2 \\cdots a_n}"],
+      "html_motion_notes": [],
+      "requires_svg_motion": false,
+      "estimated_seconds": 45
+    },
+    {
+      "id": "seg-bridge-insight",
+      "title": "桥接：从 2^k 到任意 n 的关键洞察",
+      "goal": "解释为什么可以从大数回推到小数",
+      "narration": "关键洞察在于：如果不等式对 n 个数成立，我们可以把第 n 个数设为前 n-1 个数的平均值...",
+      "modality": "html",
+      "formulas": [],
+      "html_motion_notes": ["分步展示回推过程"],
+      "requires_svg_motion": false,
+      "estimated_seconds": 35
+    },
+    {
+      "id": "seg-summary",
+      "title": "总结：反向归纳的一般模式",
+      "goal": "总结反向归纳法的适用场景",
+      "narration": "柯西的反向归纳法告诉我们，有时候先证明更强的结论，再回推到一般情况，反而更容易...",
+      "modality": "html",
+      "formulas": [],
+      "html_motion_notes": ["总结卡片"],
+      "requires_svg_motion": false,
+      "estimated_seconds": 25
+    }
+  ]
+}

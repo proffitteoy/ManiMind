@@ -212,7 +212,7 @@ def _configure_parser() -> argparse.ArgumentParser:
         "--tts-provider",
         type=str,
         default="powershell_sapi",
-        help="TTS provider: powershell_sapi | command | noop",
+        help="TTS provider: powershell_sapi | command | f5_tts | noop",
     )
 
     return parser
