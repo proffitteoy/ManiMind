@@ -165,4 +165,9 @@ def check_tools() -> dict[str, bool]:
                 str(user_python_scripts),
             ],
         ),
+        "hyperframes": _tool_available(
+            "npx",
+            env_var="MANIMIND_NPX_PATH",
+            extra_candidates=[],
+        ),
     }

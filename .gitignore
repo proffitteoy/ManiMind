@@ -17,7 +17,7 @@ build/
 
 # Environment
 .env
-测试.md
+docs/测试.md
 
 # Runtime artifacts
 runtime/cache/*

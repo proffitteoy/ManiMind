@@ -448,6 +448,106 @@ def _read_dispatch_worker_limit(default: int = 3) -> int:
         return default
 
 
+def _synthesize_and_build_timing(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+    storyboard_outline: list[dict[str, Any]],
+    handoff_notes: dict[str, Any],
+    cfg: LLMRuntimeConfig,
+) -> dict[str, Any]:
+    """在 workers 之前合成 TTS，生成 timing_manifest。
+
+    返回 timing_manifest dict，如果 TTS 不可用则返回空 dict。
+    """
+    from .tts import TTSJob, build_tts_adapter
+
+    tts_provider = os.environ.get("MANIMIND_TTS_PROVIDER", "powershell_sapi").strip()
+    try:
+        adapter = build_tts_adapter(tts_provider)
+    except (ValueError, RuntimeError) as exc:
+        _log_progress(session_id, "tts", f"adapter_unavailable: {exc}")
+        return {}
+
+    output_dir = Path(plan.runtime_layout.output_dir) / "audio"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    from datetime import datetime
+
+    segments_timing: dict[str, Any] = {}
+
+    for entry in storyboard_outline:
+        seg_id = entry.get("segment_id", "")
+        narration_text = entry.get("narration_text", "")
+        if not narration_text and seg_id in handoff_notes:
+            narration_text = handoff_notes[seg_id].get("narration_text", "")
+        if not narration_text:
+            continue
+
+        audio_path = output_dir / f"{seg_id}.wav"
+        job = TTSJob(
+            project_id=plan.project_id,
+            script_text=narration_text,
+            output_path=str(audio_path),
+            voice="default",
+            language="zh",
+        )
+        try:
+            result_path = adapter.synthesize(job)
+            duration = _get_audio_duration(Path(result_path))
+        except Exception as exc:
+            _log_progress(session_id, "tts", f"segment={seg_id} failed: {exc}")
+            duration = entry.get("estimated_seconds", 20)
+            result_path = str(audio_path)
+
+        segments_timing[seg_id] = {
+            "audio_path": result_path,
+            "duration_seconds": duration,
+        }
+        _log_progress(session_id, "tts", f"segment={seg_id} duration={duration:.1f}s")
+
+    timing_manifest = {
+        "generated_at": datetime.now().isoformat(),
+        "tts_provider": tts_provider,
+        "segments": segments_timing,
+    }
+
+    manifest_path = Path(plan.runtime_layout.project_context_dir) / "timing_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(timing_manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    _log_progress(session_id, "tts", f"timing_manifest saved segments={len(segments_timing)}")
+    return timing_manifest
+
+
+def _get_audio_duration(audio_path: Path) -> float:
+    """获取音频文件时长（秒）。优先用 ffprobe，降级用文件大小估算。"""
+    if not audio_path.exists():
+        return 20.0
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet", "-show_entries",
+                "format=duration", "-of", "csv=p=0", str(audio_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+    # WAV 降级估算：文件大小 / (采样率 * 位深 * 声道 / 8)
+    # 假设 16kHz 16bit mono = 32000 bytes/sec
+    size = audio_path.stat().st_size
+    return max(1.0, size / 32000.0)
+
+
 def run_to_review(
     plan: ProjectPlan,
     session_id: str,
@@ -829,6 +929,20 @@ def run_to_review(
         "coordinator",
         f"plan.storyboard completed outline={len(storyboard_outline)}",
     )
+
+    # --- TTS 前移：在 workers 之前合成配音，生成 timing_manifest ---
+    timing_manifest = _synthesize_and_build_timing(
+        plan=plan,
+        session_id=session_id,
+        storyboard_outline=storyboard_outline,
+        handoff_notes=handoff_notes,
+        cfg=cfg,
+    )
+    # 将真实时长注入 handoff_notes，供 workers 消费
+    if timing_manifest:
+        for seg_id, seg_timing in timing_manifest.get("segments", {}).items():
+            if seg_id in handoff_notes:
+                handoff_notes[seg_id]["duration_seconds"] = seg_timing["duration_seconds"]
 
     shared_context = {
         "research_summary": research_summary.strip(),

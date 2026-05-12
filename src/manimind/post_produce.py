@@ -142,16 +142,35 @@ def _collect_segment_videos(
             record_by_key[output_key] = record
 
     for segment in plan.segments:
-        output_key = f"{plan.project_id}.manim.{segment.id}.approved"
-        record = record_by_key.get(output_key)
-        if not isinstance(record, dict):
-            continue
-        files = record.get("artifact_files")
-        if not isinstance(files, list):
-            continue
-        for item in files:
-            if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
-                ordered_videos.append(item)
+        # Manim 产物
+        manim_key = f"{plan.project_id}.manim.{segment.id}.approved"
+        record = record_by_key.get(manim_key)
+        if isinstance(record, dict):
+            files = record.get("artifact_files")
+            if isinstance(files, list):
+                for item in files:
+                    if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
+                        ordered_videos.append(item)
+                        break
+                else:
+                    continue
+                continue
+
+        # HTML 产物：先查 approved record 中的 mp4，没有则现场渲染
+        html_key = f"{plan.project_id}.html.{segment.id}.approved"
+        record = record_by_key.get(html_key)
+        if isinstance(record, dict):
+            files = record.get("artifact_files")
+            if isinstance(files, list):
+                for item in files:
+                    if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
+                        ordered_videos.append(item)
+                        break
+                else:
+                    # 没有现成 mp4，尝试从 HTML 渲染
+                    html_video = _render_html_segment_video(plan, segment.id, files)
+                    if html_video:
+                        ordered_videos.append(html_video)
 
     if ordered_videos:
         return ordered_videos
@@ -165,6 +184,31 @@ def _collect_segment_videos(
             if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
                 fallback_videos.append(item)
     return fallback_videos
+
+
+def _render_html_segment_video(
+    plan: ProjectPlan,
+    segment_id: str,
+    artifact_files: list[str],
+) -> str | None:
+    """从 HTML artifact 渲染 mp4，返回路径或 None。"""
+    html_dir: Path | None = None
+    for item in artifact_files:
+        if isinstance(item, str) and item.lower().endswith(".html") and Path(item).exists():
+            html_dir = Path(item).parent
+            break
+    if not html_dir:
+        return None
+
+    from .worker_adapters import render_html_to_video, WorkerExecutionError
+
+    output_path = html_dir / "scene.mp4"
+    try:
+        render_html_to_video(html_dir, output_path)
+        return str(output_path)
+    except (WorkerExecutionError, Exception) as exc:
+        _log_finalize("", "html-render", f"segment={segment_id} failed: {exc}")
+        return None
 
 
 def _format_srt_time(seconds: int) -> str:
@@ -216,6 +260,53 @@ def _is_real_wav(path: str | None) -> bool:
     except OSError:
         return False
     return header == b"RIFF"
+
+
+def align_video_to_audio(video_path: Path, target_duration: float) -> Path:
+    """兜底微调：仅处理 < 5% 的时长偏差。超过 5% 应在 review 阶段被拦住。"""
+    ffmpeg = _resolve_ffmpeg_path()
+    if not ffmpeg or not video_path.exists():
+        return video_path
+
+    probe_cmd = [
+        "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+        "-of", "csv=p=0", str(video_path),
+    ]
+    try:
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0 or not result.stdout.strip():
+            return video_path
+        actual = float(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        return video_path
+
+    if target_duration <= 0 or abs(actual - target_duration) < 0.5:
+        return video_path
+
+    ratio = actual / target_duration
+    output = video_path.with_stem(video_path.stem + "-aligned")
+
+    if 0.95 <= ratio <= 1.05:
+        speed = actual / target_duration
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(video_path), "-filter:v", f"setpts={1/speed}*PTS", "-an", str(output)],
+            capture_output=True, text=True,
+        )
+    elif ratio < 0.95:
+        # 视频太短，末尾补静帧
+        pad_duration = target_duration - actual
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(video_path), "-vf", f"tpad=stop_mode=clone:stop_duration={pad_duration:.2f}", str(output)],
+            capture_output=True, text=True,
+        )
+    else:
+        # 视频太长，裁剪
+        subprocess.run(
+            [ffmpeg, "-y", "-i", str(video_path), "-t", f"{target_duration:.2f}", "-c", "copy", str(output)],
+            capture_output=True, text=True,
+        )
+
+    return output if output.exists() else video_path
 
 
 def _build_final_video(
@@ -386,7 +477,43 @@ def finalize_delivery(
     )
     tts_output: str | None = None
     tts_error: str | None = None
-    if narration_text.strip():
+
+    # 优先从 timing_manifest 读取已有的 TTS 音频（TTS 已前移到 run_to_review）
+    timing_manifest_path = Path(plan.runtime_layout.project_context_dir) / "timing_manifest.json"
+    if timing_manifest_path.exists():
+        try:
+            timing_data = json.loads(timing_manifest_path.read_text(encoding="utf-8"))
+            audio_files = [
+                seg["audio_path"]
+                for seg in timing_data.get("segments", {}).values()
+                if isinstance(seg.get("audio_path"), str) and Path(seg["audio_path"]).exists()
+            ]
+            if audio_files:
+                # 拼接所有 segment 音频为一个完整音频
+                ffmpeg = _resolve_ffmpeg_path()
+                if ffmpeg and len(audio_files) > 1:
+                    audio_dir = Path(plan.runtime_layout.output_dir) / "audio"
+                    audio_dir.mkdir(parents=True, exist_ok=True)
+                    concat_audio = audio_dir / "narration-concat.txt"
+                    concat_audio.write_text(
+                        "\n".join(f"file '{p.replace(chr(92), '/')}'" for p in audio_files),
+                        encoding="utf-8",
+                    )
+                    merged_audio = audio_dir / "narration.wav"
+                    subprocess.run(
+                        [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_audio), "-c", "copy", str(merged_audio)],
+                        capture_output=True, text=True,
+                    )
+                    if merged_audio.exists():
+                        tts_output = str(merged_audio)
+                elif audio_files:
+                    tts_output = audio_files[0]
+                _log_finalize(session_id, "tts", f"using timing_manifest audio: {tts_output}")
+        except (json.JSONDecodeError, KeyError) as exc:
+            _log_finalize(session_id, "tts", f"timing_manifest read failed: {exc}")
+
+    # 降级：如果 timing_manifest 不存在或无音频，走原有 TTS 合成
+    if not tts_output and narration_text.strip():
         audio_dir = Path(plan.runtime_layout.output_dir) / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
         target_audio = audio_dir / "narration.wav"

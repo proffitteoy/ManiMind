@@ -38,7 +38,9 @@ DEFAULT_SESSION_ID = "manual-session"
 
 
 def _load_manifest(manifest_path: Path) -> dict:
-    return json.loads(manifest_path.read_text(encoding="utf-8"))
+    # PowerShell `Set-Content -Encoding UTF8` may write a BOM on Windows.
+    # Use `utf-8-sig` so both UTF-8 and UTF-8-with-BOM manifests are accepted.
+    return json.loads(manifest_path.read_text(encoding="utf-8-sig"))
 
 
 def _build_segments(raw_segments: list[dict]) -> list[SegmentSpec]:
@@ -213,6 +215,31 @@ def _configure_parser() -> argparse.ArgumentParser:
         type=str,
         default="powershell_sapi",
         help="TTS provider: powershell_sapi | command | f5_tts | noop",
+    )
+
+    role_exec_parser = subparsers.add_parser(
+        "role-exec",
+        help="单独执行某个角色（调试用）",
+    )
+    role_exec_parser.add_argument("manifest", type=Path)
+    role_exec_parser.add_argument("role_id", type=str)
+    role_exec_parser.add_argument("stage", type=str)
+    role_exec_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="执行对应的会话标识",
+    )
+    role_exec_parser.add_argument(
+        "--segment",
+        type=str,
+        default=None,
+        help="指定 segment ID（worker 角色需要）",
+    )
+    role_exec_parser.add_argument(
+        "--preview-only",
+        action="store_true",
+        help="只输出完整 prompt，不调用 LLM",
     )
 
     return parser
@@ -430,6 +457,66 @@ def main() -> None:
                 {
                     "result": result,
                     "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "role-exec":
+        from .context_assembly import PromptSectionCache  # noqa: F811
+        from .role_executor import RoleExecutor
+
+        plan = _build_plan_model_from_manifest(args.manifest)
+        load_execution_task_snapshot(plan)
+        stage = PipelineStage(args.stage)
+        payload: dict = {
+            "project_id": plan.project_id,
+            "title": plan.title,
+            "segments": [seg.to_dict() for seg in plan.segments],
+        }
+        if args.segment:
+            payload["segment_id"] = args.segment
+
+        executor = RoleExecutor(args.role_id, cfg=None if not args.preview_only else "skip")
+
+        if args.preview_only:
+            bundle = executor.preview_prompt(
+                plan=plan,
+                session_id=args.session_id,
+                stage=stage,
+                payload=payload,
+            )
+            print(
+                json.dumps(
+                    {
+                        "role_id": args.role_id,
+                        "stage": args.stage,
+                        "system_prompt": bundle.system_prompt,
+                        "user_prompt": bundle.user_prompt,
+                        "prompt_sections_count": len(bundle.prompt_sections),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
+
+        result = executor.execute(
+            plan=plan,
+            session_id=args.session_id,
+            stage=stage,
+            payload=payload,
+        )
+        print(
+            json.dumps(
+                {
+                    "role_id": result.role_id,
+                    "stage": result.stage,
+                    "duration_ms": result.duration_ms,
+                    "output": result.output,
+                    "llm_meta": result.llm_meta,
                 },
                 ensure_ascii=False,
                 indent=2,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 from typing import Any
 
 from .context_assembly import (
@@ -14,6 +15,26 @@ from .context_assembly import (
     section,
 )
 from .models import PipelineStage, ProjectPlan
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+ROLE_PROMPT_DIR = _REPO_ROOT / "resources" / "prompts" / "roles"
+SHARED_PROMPT_DIR = _REPO_ROOT / "resources" / "prompts" / "shared"
+
+
+def load_role_prompt(role_id: str) -> str:
+    path = ROLE_PROMPT_DIR / f"{role_id}.md"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def load_shared_prompts() -> str:
+    parts = []
+    for name in ["manimind-core.md", "anti-bad-script.md"]:
+        path = SHARED_PROMPT_DIR / name
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n\n---\n\n".join(parts)
 
 
 @dataclass(slots=True)
@@ -86,6 +107,8 @@ def build_recipe_sections(
         return "\n".join(lines)
 
     return [
+        section(f"{role_id}.shared-contract", load_shared_prompts),
+        section(f"{role_id}.role-prompt", lambda: load_role_prompt(role_id)),
         section(f"{role_id}.{recipe.name}.system", _system_section),
         section(f"{role_id}.{recipe.name}.quality", _quality_section),
         section(f"{role_id}.{recipe.name}.contract", _contract_section),
@@ -194,11 +217,14 @@ def planner_recipe() -> PromptRecipe:
         ),
         response_contract=(
             "只输出一个 JSON 对象。字段必须包含 "
-            "`segment_priorities`, `must_checks`, `risk_flags`, `visual_briefs`, `narrative_arc`。"
+            "`segment_priorities`（每条必须含 semantic_type、cognitive_goal、why_this_worker）, "
+            "`must_checks`, `risk_flags`, `visual_briefs`, `narrative_arc`。"
         ),
         extra_rules=[
-            "每个 segment 的目标必须清晰可审阅，不能写成泛泛的‘介绍背景’。",
+            "每个 segment 的目标必须清晰可审阅，不能写成泛泛的’介绍背景’。",
             "如果某段数学负荷过高，要主动提出降载或拆段建议。",
+            "第一个 segment 的 semantic_type 必须是 hook 或 motivation，不能是 formalization。",
+            "不得存在连续两个 density_level=high 的 segment 之间没有 relief/bridge 段。",
         ],
     )
 
@@ -213,11 +239,16 @@ def coordinator_recipe() -> PromptRecipe:
         ),
         response_contract=(
             "只输出一个 JSON 对象。字段必须包含 "
-            "`script_outline`, `storyboard_master`, `handoff_notes`。"
+            "`script_outline`, `storyboard_master`, `handoff_notes`, `quality_self_check`。"
+            "`quality_self_check` 必须含 every_segment_has_hook, every_formula_has_motivation, "
+            "adjacent_segments_have_bridge, no_consecutive_high_density, "
+            "last_segment_has_summary, narration_sounds_like_speech，且所有字段必须为 true。"
         ),
         extra_rules=[
             "脚本必须像成片旁白，而不是摘要条目。",
             "每段都要显式说明该段要让观众理解什么，而不是只重复公式。",
+            "每段必须有 hook_sentence 和 bridge_to_next。",
+            "handoff_notes 中每个 segment 必须有 worker_type、why_this_worker、narration_text。",
         ],
     )
 
@@ -232,12 +263,18 @@ def reviewer_recipe() -> PromptRecipe:
         ),
         response_contract=(
             "只输出一个 JSON 对象。字段必须包含 "
-            "`summary`, `decision`, `risk_notes`, `must_check`, `evidence_checks`；"
+            "`summary`, `decision`, `risk_notes`, `must_check`, `evidence_checks`, "
+            "`script_quality`, `return_recommendation_if_needed`；"
             "`decision` 必须固定为 `pending_human_confirmation`。"
+            "`script_quality` 必须含 has_hooks, has_motivation_before_formulas, "
+            "has_bridges, sounds_like_speech, no_consecutive_high_density, weak_points。"
+            "`return_recommendation_if_needed` 必须含 should_return, target_roles, must_fix, prompt_patch。"
         ),
         extra_rules=[
             "不能输出 approve/approved。",
-            "必须指出人工还需要看的具体风险，而不是只写‘整体良好’。",
+            "必须指出人工还需要看的具体风险，而不是只写’整体良好’。",
+            "必须检查配音语速与时长对齐：每段视觉产物时长与 timing_manifest 偏差是否 < 10%。",
+            "必须检查叙事质量：hook、桥接、动机铺垫是否齐全。",
         ],
     )
 

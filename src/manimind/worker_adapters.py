@@ -245,16 +245,26 @@ class HtmlWorkerAdapter:
             raise WorkerExecutionError(f"html_llm_failed:{exc}") from exc
 
         html_path.write_text(_ensure_html_document(html_text), encoding="utf-8")
+
+        artifact_files = [str(html_path)]
+        video_path = out_dir / "scene.mp4"
+        try:
+            render_html_to_video(out_dir, video_path)
+            artifact_files.append(str(video_path))
+        except (WorkerExecutionError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            artifact_files.append(f"html_video_render_skipped:{exc}")
+
         return WorkerRunResult(
             worker_role=task.owner_role,
             segment_id=segment.id,
             summary=f"HTML rendered: {segment.title}",
-            artifact_files=[str(html_path)],
+            artifact_files=artifact_files,
             metadata={
                 "worker": "html",
                 "segment_id": segment.id,
                 "title": segment.title,
                 "llm_generation": meta,
+                "has_video": video_path.exists(),
             },
         )
 
@@ -561,3 +571,41 @@ def render_with_worker(
             prompt_cache=prompt_cache,
         )
     raise WorkerExecutionError(f"unsupported_worker_role:{task.owner_role}")
+
+
+def render_html_to_video(html_dir: Path, output_path: Path, *, fps: int = 30) -> Path:
+    """用 puppeteer-core + ffmpeg 将 HTML composition 渲染为 mp4。
+
+    通过 scripts/html_to_video.js 逐帧截取 GSAP timeline 并编码。
+    """
+    from .bootstrap import repo_root
+
+    node_bin = _find_tool("node", "MANIMIND_NODE_PATH") or "node"
+    script = repo_root() / "scripts" / "html_to_video.js"
+    if not script.exists():
+        raise WorkerExecutionError("html_to_video_script_not_found")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        node_bin,
+        str(script),
+        str(html_dir),
+        str(output_path),
+        "--fps", str(fps),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+    )
+    if result.returncode != 0:
+        raise WorkerExecutionError(
+            f"html_render_failed: exit={result.returncode} stderr={result.stderr[:800]}"
+        )
+    if not output_path.exists():
+        raise WorkerExecutionError("html_render_no_output")
+    return output_path
+
