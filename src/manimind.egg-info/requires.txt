@@ -1,0 +1,17 @@
+
+[api]
+fastapi>=0.111.0
+uvicorn>=0.30.0
+
+[dev]
+pytest>=8.0.0
+
+[llm]
+openai>=1.30.0
+
+[pdf]
+pypdf>=5.0.0
+
+[render]
+manim>=0.19.0
+manim-voiceover[gtts]>=0.3.7

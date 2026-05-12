@@ -11,6 +11,8 @@ from .models import RuntimeLayout
 
 
 WORKSPACE_DIRECTORIES = [
+    "inputs/papers",
+    "inputs/notes",
     "configs",
     "scripts",
     "src/manimind",

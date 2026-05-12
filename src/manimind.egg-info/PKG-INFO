@@ -1,3 +1,22 @@
+Metadata-Version: 2.4
+Name: manimind
+Version: 0.1.0
+Summary: Multi-agent orchestration for mathematical explainer animation production.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Provides-Extra: pdf
+Requires-Dist: pypdf>=5.0.0; extra == "pdf"
+Provides-Extra: llm
+Requires-Dist: openai>=1.30.0; extra == "llm"
+Provides-Extra: api
+Requires-Dist: fastapi>=0.111.0; extra == "api"
+Requires-Dist: uvicorn>=0.30.0; extra == "api"
+Provides-Extra: render
+Requires-Dist: manim>=0.19.0; extra == "render"
+Requires-Dist: manim-voiceover[gtts]>=0.3.7; extra == "render"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+
 ﻿# ManiMind
 
 ManiMind 是一个面向数学科普动画生产的多 Agent 编排项目。输入论文和笔记，输出可审核的讲解脚本、分镜、Manim 数学动画、HTML 科普片段，以及后续配音、字幕、剪辑拼接所需的结构化产物。
@@ -20,9 +39,6 @@ ManiMind/
 ├─ AGENTS.md
 ├─ README.md
 ├─ docs/
-├─ inputs/
-│  ├─ papers/
-│  └─ notes/
 ├─ frontend/
 ├─ configs/
 ├─ scripts/
@@ -38,14 +54,6 @@ ManiMind/
 ├─ outputs/
 └─ logs/
 ```
-
-## 输入素材放置
-
-- 论文主文档放 `inputs/papers/`（支持 `.md/.txt/.pdf`）。
-- 辅助笔记放 `inputs/notes/`。
-- 在 manifest 里使用相对路径引用，例如：
-  - `source_bundle.paper_path = "inputs/papers/my-paper.pdf"`
-  - `source_bundle.note_paths = ["inputs/notes/outline.md"]`
 
 ## 初始化步骤
 

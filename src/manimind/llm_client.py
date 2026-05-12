@@ -302,6 +302,12 @@ def _post_json(
                 time.sleep(min(8, 2 ** (attempt - 1)))
                 continue
             raise last_error from exc
+        except http.client.IncompleteRead as exc:
+            last_error = LLMRequestError("incomplete_read")
+            if attempt < retries:
+                time.sleep(min(8, 2 ** (attempt - 1)))
+                continue
+            raise last_error from exc
 
     if last_error is not None:
         raise last_error

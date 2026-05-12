@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import json
 import os
@@ -439,6 +440,14 @@ def _planned_primary_worker_path(
     return None
 
 
+def _read_dispatch_worker_limit(default: int = 3) -> int:
+    raw = os.environ.get("MANIMIND_DISPATCH_MAX_WORKERS", str(default)).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
 def run_to_review(
     plan: ProjectPlan,
     session_id: str,
@@ -837,6 +846,7 @@ def run_to_review(
         if task.stage == PipelineStage.DISPATCH
     ]
     render_evidence: list[dict[str, Any]] = []
+    runnable_entries: list[dict[str, Any]] = []
 
     for task in render_tasks:
         worker_role = task.owner_role
@@ -890,79 +900,162 @@ def run_to_review(
             _log_progress(session_id, "dispatch", f"task={task.id} skipped_by_plan")
             continue
 
-        persist_agent_message(
-            plan=plan,
-            session_id=session_id,
-            event_type=EventType.WORKER_PROGRESS,
-            role_id=worker_role,
-            stage=PipelineStage.DISPATCH,
-            task_id=task.id,
-            payload={"progress_label": "start_render"},
-        )
-
-        try:
-            render_result = render_with_worker(
-                plan=plan,
-                segment=segment,
-                task=task,
-                session_id=session_id,
-                shared_context=shared_context,
-                prompt_cache=prompt_cache,
-            )
-        except WorkerExecutionError as exc:
-            persist_agent_message(
-                plan=plan,
-                session_id=session_id,
-                event_type=EventType.WORKER_BLOCKER,
-                role_id=worker_role,
-                stage=PipelineStage.DISPATCH,
-                task_id=task.id,
-                payload={"blocked_reason": str(exc)},
-            )
-            raise RuntimeError(f"render_failed:{task.id}:{exc}") from exc
-
-        output_paths: list[str] = []
-        for output_key in task.required_outputs:
-            payload = {
-                "project_id": plan.project_id,
-                "task_id": task.id,
-                "output_key": output_key,
-                "render_summary": render_result.summary,
-                "artifact_files": render_result.artifact_files,
-                "artifact_metadata": render_result.metadata,
-            }
-            output_paths.append(
-                str(write_output_key(plan, session_id, output_key, payload))
-            )
-        _complete_task(plan, session_id, task.id, worker_role)
-        persist_agent_message(
-            plan=plan,
-            session_id=session_id,
-            event_type=EventType.WORKER_RESULT,
-            role_id=worker_role,
-            stage=PipelineStage.DISPATCH,
-            task_id=task.id,
-            payload={
-                "summary": render_result.summary,
-                "artifact_files": render_result.artifact_files,
-            },
-        )
-        render_evidence.append(
+        runnable_entries.append(
             {
-                "task_id": task.id,
+                "task": task,
                 "worker_role": worker_role,
-                "segment_id": segment.id,
-                "summary": render_result.summary,
-                "artifact_files": render_result.artifact_files,
-                "output_records": output_paths,
-                "metadata": render_result.metadata,
+                "segment": segment,
             }
+        )
+
+    if runnable_entries:
+        dispatch_workers = min(
+            len(runnable_entries),
+            _read_dispatch_worker_limit(default=3),
         )
         _log_progress(
             session_id,
             "dispatch",
-            f"task={task.id} completed artifacts={len(render_result.artifact_files)}",
+            (
+                "parallel_dispatch_start "
+                f"tasks={len(runnable_entries)} max_workers={dispatch_workers}"
+            ),
         )
+
+        for entry in runnable_entries:
+            task = entry["task"]
+            worker_role = entry["worker_role"]
+            persist_agent_message(
+                plan=plan,
+                session_id=session_id,
+                event_type=EventType.WORKER_PROGRESS,
+                role_id=worker_role,
+                stage=PipelineStage.DISPATCH,
+                task_id=task.id,
+                payload={"progress_label": "start_render"},
+            )
+
+        success_by_task_id: dict[str, Any] = {}
+        failure_by_task_id: dict[str, str] = {}
+
+        with ThreadPoolExecutor(max_workers=dispatch_workers) as pool:
+            future_to_entry = {
+                pool.submit(
+                    render_with_worker,
+                    plan=plan,
+                    segment=entry["segment"],
+                    task=entry["task"],
+                    session_id=session_id,
+                    shared_context=shared_context,
+                    prompt_cache=PromptSectionCache(),
+                ): entry
+                for entry in runnable_entries
+            }
+
+            for future in as_completed(future_to_entry):
+                entry = future_to_entry[future]
+                task = entry["task"]
+                worker_role = entry["worker_role"]
+                try:
+                    render_result = future.result()
+                    success_by_task_id[task.id] = render_result
+                    _log_progress(session_id, "dispatch", f"task={task.id} render_done")
+                except WorkerExecutionError as exc:
+                    failure_by_task_id[task.id] = str(exc)
+                    persist_agent_message(
+                        plan=plan,
+                        session_id=session_id,
+                        event_type=EventType.WORKER_BLOCKER,
+                        role_id=worker_role,
+                        stage=PipelineStage.DISPATCH,
+                        task_id=task.id,
+                        payload={"blocked_reason": str(exc)},
+                    )
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    reason = f"unexpected_render_error:{type(exc).__name__}:{exc}"
+                    failure_by_task_id[task.id] = reason
+                    persist_agent_message(
+                        plan=plan,
+                        session_id=session_id,
+                        event_type=EventType.WORKER_BLOCKER,
+                        role_id=worker_role,
+                        stage=PipelineStage.DISPATCH,
+                        task_id=task.id,
+                        payload={"blocked_reason": reason},
+                    )
+
+        for entry in runnable_entries:
+            task = entry["task"]
+            worker_role = entry["worker_role"]
+            segment = entry["segment"]
+
+            if task.id in failure_by_task_id:
+                render_evidence.append(
+                    {
+                        "task_id": task.id,
+                        "worker_role": worker_role,
+                        "segment_id": segment.id,
+                        "summary": f"Failed: {failure_by_task_id[task.id]}",
+                        "artifact_files": [],
+                        "output_records": [],
+                        "metadata": {
+                            "dispatch_decision": "failed",
+                            "blocked_reason": failure_by_task_id[task.id],
+                        },
+                    }
+                )
+                continue
+
+            render_result = success_by_task_id[task.id]
+            output_paths: list[str] = []
+            for output_key in task.required_outputs:
+                payload = {
+                    "project_id": plan.project_id,
+                    "task_id": task.id,
+                    "output_key": output_key,
+                    "render_summary": render_result.summary,
+                    "artifact_files": render_result.artifact_files,
+                    "artifact_metadata": render_result.metadata,
+                }
+                output_paths.append(
+                    str(write_output_key(plan, session_id, output_key, payload))
+                )
+            _complete_task(plan, session_id, task.id, worker_role)
+            persist_agent_message(
+                plan=plan,
+                session_id=session_id,
+                event_type=EventType.WORKER_RESULT,
+                role_id=worker_role,
+                stage=PipelineStage.DISPATCH,
+                task_id=task.id,
+                payload={
+                    "summary": render_result.summary,
+                    "artifact_files": render_result.artifact_files,
+                },
+            )
+            render_evidence.append(
+                {
+                    "task_id": task.id,
+                    "worker_role": worker_role,
+                    "segment_id": segment.id,
+                    "summary": render_result.summary,
+                    "artifact_files": render_result.artifact_files,
+                    "output_records": output_paths,
+                    "metadata": render_result.metadata,
+                }
+            )
+            _log_progress(
+                session_id,
+                "dispatch",
+                f"task={task.id} completed artifacts={len(render_result.artifact_files)}",
+            )
+
+        for entry in runnable_entries:
+            task = entry["task"]
+            if task.id in failure_by_task_id:
+                raise RuntimeError(
+                    f"render_failed:{task.id}:{failure_by_task_id[task.id]}"
+                )
 
     review_evidence_path = write_output_key(
         plan=plan,
