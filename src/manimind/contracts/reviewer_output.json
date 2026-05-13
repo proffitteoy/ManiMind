@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": [
+    "summary",
+    "decision",
+    "risk_notes",
+    "must_check",
+    "evidence_checks"
+  ],
+  "properties": {
+    "summary": { "type": "string" },
+    "decision": { "type": "string" },
+    "risk_notes": { "type": "array" },
+    "must_check": { "type": "array" },
+    "evidence_checks": { "type": "array" },
+    "script_quality": { "type": "object" },
+    "return_recommendation_if_needed": { "type": "object" }
+  }
+}

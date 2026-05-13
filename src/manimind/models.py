@@ -51,6 +51,24 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class FailureCategory(str, Enum):
+    INPUT_MISSING = "input_missing"
+    PDF_EXTRACT_FAILED = "pdf_extract_failed"
+    LLM_JSON_INVALID = "llm_json_invalid"
+    SCHEMA_VALIDATION_FAILED = "schema_validation_failed"
+    WORKER_OUTPUT_INVALID = "worker_output_invalid"
+    HTML_RENDER_FAILED = "html_render_failed"
+    MANIM_LATEX_ERROR = "manim_latex_error"
+    MANIM_SYNTAX_ERROR = "manim_syntax_error"
+    FFMPEG_MERGE_FAILED = "ffmpeg_merge_failed"
+    AUDIO_VIDEO_DURATION_MISMATCH = "audio_video_duration_mismatch"
+    REVIEW_NOT_COMPLETED = "review_not_completed"
+    MISSING_REQUIRED_OUTPUTS = "missing_required_outputs"
+    TTS_SYNTHESIS_FAILED = "tts_synthesis_failed"
+    TIMEOUT = "timeout"
+    UNKNOWN = "unknown"
+
+
 class EventType(str, Enum):
     PLAN_SNAPSHOT = "plan_snapshot"
     DISPATCH_CONTEXT_PACK = "dispatch.context_pack"

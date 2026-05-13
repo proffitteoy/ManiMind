@@ -96,6 +96,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-prerequisites.ps1
 - `task-update <manifest.json> <task_id> <status> <actor_role>`：按状态机推进任务。
 - `agent-message <manifest.json> <event_type> <role_id> <stage> --payload '{...}'`：写入 `worker.progress / worker.blocker / worker.result / review.decision` 结构化消息。
 - `run-to-review <manifest.json>`：执行 ingest/summarize/plan/dispatch，并推进到 `review`。
+- `rerun <manifest.json> <runner_name> [--segment <segment_id>]`：重跑指定 runner（例如 `rerun plan`、`rerun dispatch --segment seg-1`）。
+- `trace <manifest.json> --session-id <session_id> [--stage] [--role] [--failed-only]`：查询会话级 LLM trace。
 - `human-review <manifest.json> approve|return`：人工审核放行或打回。
 - `finalize <manifest.json> --tts-provider powershell_sapi|command|f5_tts|noop`：审核通过后执行后处理并完成打包。
 - `finalize` 会尝试调用 `ffmpeg` 合并 `manim` 片段，生成 `outputs/<project_id>/video/segments-merged.mp4`；若有真实 wav 配音会继续生成 `final-with-audio.mp4`。
@@ -127,6 +129,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\finalize-with-f5-tts.ps1 `
 
 - `-ReferenceAudio`：覆盖默认参考音频路径
 - `-ReferenceText`：提供参考音频文本（不填则自动转写）
+- `-RefMinSeconds`：参考音频有效时长下限（默认 `28` 秒，不足会自动补静音）
+- `-MaxTotalSeconds`：单次 batch 的参考+生成总时长预算（默认 `30` 秒）
 - `-SessionId`：指定会话 ID
 - `-HfCacheRoot`：指定已有 HuggingFace 缓存根目录（可复用本地已下载权重）
 - `-PythonExe` / `-FfmpegExe`：覆盖本机工具路径
@@ -172,7 +176,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\finalize-with-f5-tts.ps1 `
   - `POST /api/projects/context-pack`
   - `POST /api/projects/events/message`
   - `GET /api/projects/{project_id}/events`
+  - `GET /api/projects/{project_id}/trace`
   - `POST /api/projects/run-to-review`
+  - `POST /api/projects/rerun`
+  - `POST /api/projects/trace`
   - `POST /api/projects/review/decision`
   - `GET /api/projects/{project_id}/review-return`
   - `POST /api/projects/finalize`
@@ -190,7 +197,7 @@ python -m uvicorn backend.main:app --reload
 - 新增目录：`frontend/manimind-console/`
 - 技术栈：`Next.js 16 + React 19 + Tailwind CSS 4`
 - 当前作用：先验证控制台首页的信息结构、模块边界和后续 API 接线点
-- 当前数据：`/live` 已接入 `backend/` 的项目、任务、上下文、审核证据和产物接口；`/mock` 仅保留为静态演示页
+- 当前数据：`/live` 已接入 `backend/` 的项目、任务、上下文、审核证据、产物与 trace 接口；`/mock` 仅保留为静态演示页
 
 启动示例：
 

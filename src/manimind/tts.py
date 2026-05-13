@@ -270,6 +270,12 @@ class F5TTSAdapter:
             "--device",
             self.device,
         ]
+        ref_min_seconds = os.environ.get("MANIMIND_F5_REF_MIN_SECONDS", "").strip()
+        if ref_min_seconds:
+            command.extend(["--ref-min-seconds", ref_min_seconds])
+        max_total_seconds = os.environ.get("MANIMIND_F5_MAX_TOTAL_SECONDS", "").strip()
+        if max_total_seconds:
+            command.extend(["--max-total-seconds", max_total_seconds])
         reference_text = self._reference_text(reference_audio)
         if reference_text:
             command.extend(["--ref-text", reference_text])

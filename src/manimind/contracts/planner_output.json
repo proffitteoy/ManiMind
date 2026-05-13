@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "required": [
+    "segment_priorities",
+    "must_checks",
+    "risk_flags",
+    "visual_briefs",
+    "narrative_arc"
+  ],
+  "properties": {
+    "segment_priorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "segment_id",
+          "objective",
+          "primary_worker_path",
+          "estimated_seconds",
+          "semantic_type",
+          "cognitive_goal",
+          "why_this_worker",
+          "density_level",
+          "prerequisites"
+        ],
+        "properties": {
+          "segment_id": { "type": "string" },
+          "objective": { "type": "string" },
+          "primary_worker_path": { "type": "string" },
+          "estimated_seconds": { "type": "integer" },
+          "semantic_type": { "type": "string" },
+          "cognitive_goal": { "type": "string" },
+          "why_this_worker": { "type": "string" },
+          "density_level": { "type": "string" },
+          "prerequisites": { "type": "array" }
+        }
+      }
+    },
+    "must_checks": { "type": "array" },
+    "risk_flags": { "type": "array" },
+    "visual_briefs": { "type": "array" },
+    "narrative_arc": { "type": "array" }
+  }
+}

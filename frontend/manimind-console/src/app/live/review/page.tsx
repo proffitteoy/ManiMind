@@ -44,6 +44,16 @@ type ReviewReturnPayload = {
   timestamp?: string;
 };
 
+type ContractSchema = {
+  type?: string;
+  required?: string[];
+  properties?: Record<string, unknown>;
+};
+
+type ContractResponse = {
+  contracts?: Record<string, ContractSchema | null>;
+};
+
 async function fetchJson<T>(url: string): Promise<T | null> {
   try {
     const res = await fetch(url, { cache: 'no-store' });
@@ -55,7 +65,7 @@ async function fetchJson<T>(url: string): Promise<T | null> {
 }
 
 export default async function ReviewPage() {
-  const [evidenceResp, scriptResp, returnResp, runtimeResp] = await Promise.all([
+  const [evidenceResp, scriptResp, returnResp, runtimeResp, contractResp] = await Promise.all([
     fetchJson<{ evidence: { render_evidence: RenderEvidence[]; checkpoints: Checkpoint[] } | null }>(
       `${API_BASE}/api/projects/${PROJECT_ID}/review-evidence`
     ),
@@ -68,6 +78,9 @@ export default async function ReviewPage() {
     fetchJson<{ state?: { current_stage?: string } | null }>(
       `${API_BASE}/api/projects/${PROJECT_ID}/runtime`
     ),
+    fetchJson<ContractResponse>(
+      `${API_BASE}/api/projects/contracts?roles=planner,coordinator,reviewer`
+    ),
   ]);
 
   const evidence = evidenceResp?.evidence;
@@ -77,6 +90,10 @@ export default async function ReviewPage() {
   const latestReturn = returnResp?.payload;
   const currentStage = runtimeResp?.state?.current_stage ?? 'unknown';
   const isReviewStage = currentStage === 'review';
+  const contracts = contractResp?.contracts ?? {};
+  const reviewerRequired = contracts.reviewer?.required ?? [];
+  const plannerRequired = contracts.planner?.required ?? [];
+  const coordinatorRequired = contracts.coordinator?.required ?? [];
 
   return (
     <>
@@ -101,6 +118,17 @@ export default async function ReviewPage() {
                 <span className='text-sm font-medium text-indigo-700'>{cp.name}</span>
               </div>
             ))}
+          </div>
+        </Panel>
+      )}
+
+      {(reviewerRequired.length > 0 || plannerRequired.length > 0 || coordinatorRequired.length > 0) && (
+        <Panel className='p-5'>
+          <h2 className='mb-3 text-base font-semibold text-slate-900'>Schema 字段约束</h2>
+          <div className='grid gap-3 md:grid-cols-3'>
+            <SchemaFieldCard title='planner' fields={plannerRequired} />
+            <SchemaFieldCard title='coordinator' fields={coordinatorRequired} />
+            <SchemaFieldCard title='reviewer' fields={reviewerRequired} />
           </div>
         </Panel>
       )}
@@ -130,6 +158,29 @@ export default async function ReviewPage() {
 
       <ReviewActions apiBaseUrl={API_BASE} manifestPath={MANIFEST_PATH} sessionId={SESSION_ID} />
     </>
+  );
+}
+
+function SchemaFieldCard({ title, fields }: { title: string; fields: string[] }) {
+  if (fields.length === 0) {
+    return (
+      <div className='rounded-xl border border-slate-200 bg-slate-50 p-4'>
+        <div className='text-sm font-medium text-slate-700'>{title}</div>
+        <p className='mt-1 text-xs text-slate-500'>无 required 字段</p>
+      </div>
+    );
+  }
+  return (
+    <div className='rounded-xl border border-slate-200 bg-slate-50 p-4'>
+      <div className='text-sm font-medium text-slate-700'>{title}</div>
+      <div className='mt-2 flex flex-wrap gap-1.5'>
+        {fields.map((field) => (
+          <span key={field} className='rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-xs text-indigo-700'>
+            {field}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 

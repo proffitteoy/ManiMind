@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 from manimind.bootstrap import repo_root, sanitize_identifier
 from manimind.executor import run_to_review
 from manimind.post_produce import finalize_delivery
+from manimind.stage_orchestrator import rerun as rerun_stage
+from manimind.trace_store import query_traces
 
 from .common import build_plan_from_manifest_payload, resolve_manifest_payload
 
@@ -31,6 +33,23 @@ class FinalizeRequest(BaseModel):
     manifest_path: str | None = None
     session_id: str = Field(default="manual-session")
     tts_provider: str = Field(default="powershell_sapi")
+
+
+class RerunRequest(BaseModel):
+    manifest: dict[str, Any] | None = None
+    manifest_path: str | None = None
+    session_id: str = Field(default="manual-session")
+    runner_name: str
+    segment_id: str | None = None
+
+
+class TraceQueryRequest(BaseModel):
+    manifest: dict[str, Any] | None = None
+    manifest_path: str | None = None
+    session_id: str = Field(default="manual-session")
+    stage: str | None = None
+    role: str | None = None
+    failed_only: bool = False
 
 
 @router.post("/run-to-review")
@@ -77,6 +96,54 @@ def execute_finalize(request: FinalizeRequest) -> dict[str, Any]:
         "project_id": plan.project_id,
         "current_stage": plan.current_stage.value,
         "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
+    }
+
+
+@router.post("/rerun")
+def execute_rerun(request: RerunRequest) -> dict[str, Any]:
+    payload = resolve_manifest_payload(
+        manifest=request.manifest,
+        manifest_path=request.manifest_path,
+    )
+    plan = build_plan_from_manifest_payload(payload)
+    source_manifest = request.manifest_path or "api_payload"
+    try:
+        result = rerun_stage(
+            plan=plan,
+            session_id=request.session_id,
+            source_manifest=source_manifest,
+            runner_name=request.runner_name,
+            segment_id=request.segment_id,
+        )
+    except (RuntimeError, ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "result": result,
+        "project_id": plan.project_id,
+        "current_stage": plan.current_stage.value,
+        "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
+    }
+
+
+@router.post("/trace")
+def execute_trace_query(request: TraceQueryRequest) -> dict[str, Any]:
+    payload = resolve_manifest_payload(
+        manifest=request.manifest,
+        manifest_path=request.manifest_path,
+    )
+    plan = build_plan_from_manifest_payload(payload)
+    traces = query_traces(
+        plan=plan,
+        session_id=request.session_id,
+        stage=request.stage,
+        role=request.role,
+        failed_only=request.failed_only,
+    )
+    return {
+        "project_id": plan.project_id,
+        "session_id": request.session_id,
+        "total": len(traces),
+        "items": traces,
     }
 
 

@@ -58,7 +58,10 @@ def test_html_worker_profile_and_execution_task_are_scoped_to_html_outputs() -> 
 
     profile = next(item for item in plan.agent_profiles if item.id == "html_worker")
     assert profile.allowed_stages == [PipelineStage.DISPATCH]
-    assert profile.owned_outputs == ["demo.html.seg-1.approved"]
+    assert profile.owned_outputs == [
+        "demo.html.seg-1.approved",
+        "demo.session.html.seg-1",
+    ]
     assert "HTML 片段" in profile.output_contract
 
     render_task = next(
@@ -79,7 +82,10 @@ def test_html_worker_context_packet_contains_expected_inputs_and_write_targets()
     )
 
     assert packet["mode"] == "structured_write"
-    assert packet["write_targets"] == ["demo.html.seg-1.approved"]
+    assert packet["write_targets"] == [
+        "demo.html.seg-1.approved",
+        "demo.session.html.seg-1",
+    ]
 
     keys = {item["key"] for item in packet["context_specs"]}
     assert keys >= {

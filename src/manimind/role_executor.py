@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .context_assembly import PromptSectionCache
+from .contract_store import validate_role_output
 from .llm_client import (
     LLMRuntimeConfig,
     generate_json_for_role,
@@ -15,6 +16,7 @@ from .llm_client import (
     load_llm_runtime_config,
 )
 from .models import PipelineStage, ProjectPlan
+from .ownership import ensure_role_can_write_key
 from .prompt_system import (
     PromptBundle,
     PromptRecipe,
@@ -29,6 +31,7 @@ from .prompt_system import (
     svg_worker_recipe,
 )
 from .runtime_store import persist_context_packet
+from .trace_store import LLMTrace, persist_llm_trace
 
 
 @dataclass(slots=True)
@@ -100,8 +103,11 @@ class RoleExecutor:
         payload: dict[str, Any],
         cache: PromptSectionCache | None = None,
         persist: bool = True,
+        expected_output_keys: list[str] | None = None,
     ) -> RoleExecutionResult:
         cache = cache or PromptSectionCache()
+        for key in expected_output_keys or []:
+            ensure_role_can_write_key(plan, self.role_id, key)
         bundle = build_prompt_bundle(
             plan=plan,
             session_id=session_id,
@@ -110,7 +116,7 @@ class RoleExecutor:
             recipe=self._recipe,
             payload=payload,
             cache=cache,
-            allow_disallowed_stage=True,
+            allow_disallowed_stage=False,
         )
 
         if persist:
@@ -125,20 +131,79 @@ class RoleExecutor:
 
         if self.role_id in _TEXT_OUTPUT_ROLES:
             text, meta = generate_text_for_role(
-                self._cfg,
-                self.role_id,
+                cfg=self._cfg,
+                role_id=self.role_id,
                 instructions=bundle.system_prompt,
                 prompt=bundle.user_prompt,
             )
             output: dict[str, Any] | str = text
+            persist_llm_trace(
+                plan=plan,
+                session_id=session_id,
+                trace=LLMTrace(
+                    trace_id=f"{self.role_id}-{int(time.time() * 1000)}",
+                    role_id=self.role_id,
+                    stage=stage.value,
+                    task_id="role-exec",
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    input_context_keys=[
+                        item.get("key")
+                        for item in bundle.packet.get("context_specs", [])
+                        if isinstance(item, dict) and isinstance(item.get("key"), str)
+                    ],
+                    prompt_sections=bundle.prompt_sections,
+                    model_route=str(meta.get("route") or "unknown"),
+                    model_output_excerpt=text[:2000],
+                    parsed_output_keys=[],
+                    schema_validation="n/a",
+                    artifact_files=[],
+                    render_command=None,
+                    render_exit_code=None,
+                    duration_ms=int((time.perf_counter() - t0) * 1000),
+                    token_usage=None,
+                    retry_count=0,
+                    failure_reason=None,
+                ),
+            )
         else:
             parsed, meta = generate_json_for_role(
-                self._cfg,
-                self.role_id,
+                cfg=self._cfg,
+                role_id=self.role_id,
                 instructions=bundle.system_prompt,
                 prompt=bundle.user_prompt,
             )
+            schema_error = validate_role_output(self.role_id, parsed)
+            if schema_error:
+                raise ValueError(f"schema_validation_failed:{schema_error}")
             output = parsed
+            persist_llm_trace(
+                plan=plan,
+                session_id=session_id,
+                trace=LLMTrace(
+                    trace_id=f"{self.role_id}-{int(time.time() * 1000)}",
+                    role_id=self.role_id,
+                    stage=stage.value,
+                    task_id="role-exec",
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    input_context_keys=[
+                        item.get("key")
+                        for item in bundle.packet.get("context_specs", [])
+                        if isinstance(item, dict) and isinstance(item.get("key"), str)
+                    ],
+                    prompt_sections=bundle.prompt_sections,
+                    model_route=str(meta.get("route") or "unknown"),
+                    model_output_excerpt=json.dumps(parsed, ensure_ascii=False)[:2000],
+                    parsed_output_keys=list(parsed.keys()),
+                    schema_validation="pass",
+                    artifact_files=[],
+                    render_command=None,
+                    render_exit_code=None,
+                    duration_ms=int((time.perf_counter() - t0) * 1000),
+                    token_usage=None,
+                    retry_count=0,
+                    failure_reason=None,
+                ),
+            )
 
         duration_ms = int((time.perf_counter() - t0) * 1000)
 

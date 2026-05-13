@@ -5,6 +5,8 @@ param(
     [string]$ReferenceAudio = "",
     [string]$ReferenceText = "",
     [string]$Model = "F5TTS_v1_Base",
+    [double]$RefMinSeconds = 28.0,
+    [double]$MaxTotalSeconds = 30.0,
     [string]$HfCacheRoot = "",
     [string]$PythonExe = "C:\\Users\\84025\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
     [string]$FfmpegExe = "D:\\ffmpeg\\bin\\ffmpeg.exe",
@@ -79,6 +81,8 @@ $env:MANIMIND_F5_MODEL = $Model
 $env:MANIMIND_F5_REFERENCE_AUDIO = $ReferenceAudio
 $env:MANIMIND_F5_HF_CACHE_ROOT = $cacheRoot
 $env:MANIMIND_F5_DEVICE = "cpu"
+$env:MANIMIND_F5_REF_MIN_SECONDS = [string]$RefMinSeconds
+$env:MANIMIND_F5_MAX_TOTAL_SECONDS = [string]$MaxTotalSeconds
 if ($RemoveSilence.IsPresent) {
     $env:MANIMIND_F5_REMOVE_SILENCE = "true"
 } else {
@@ -92,6 +96,8 @@ Write-Host "ProjectId: $ProjectId"
 Write-Host "Manifest: $Manifest"
 Write-Host "SessionId: $SessionId"
 Write-Host "ReferenceAudio: $ReferenceAudio"
+Write-Host "RefMinSeconds: $env:MANIMIND_F5_REF_MIN_SECONDS"
+Write-Host "MaxTotalSeconds: $env:MANIMIND_F5_MAX_TOTAL_SECONDS"
 Write-Host "HF Cache: $cacheRoot"
 Write-Host "F5 Runner: $env:MANIMIND_F5_RUNNER_PATH"
 Write-Host "TTS Provider: f5_tts"

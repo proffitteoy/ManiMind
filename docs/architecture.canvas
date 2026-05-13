@@ -80,7 +80,7 @@
                       "y":  -320,
                       "width":  300,
                       "height":  190,
-                      "text":  "# main.py\n\n- `plan`\n- `context-pack`\n- `task-update`\n- `--session-id`",
+                      "text":  "# main.py\n\n- `plan`\n- `context-pack`\n- `task-update`\n- `run-to-review`\n- `rerun`\n- `trace`\n- `--session-id`",
                       "color":  "1"
                   },
                   {
@@ -139,7 +139,7 @@
                       "y":  -340,
                       "width":  340,
                       "height":  210,
-                      "text":  "# workflow.py\n\n- `context blueprint`\n- `agent profiles`\n- `execution DAG`\n- `media routing`\n- `review checkpoints`",
+                      "text":  "# workflow.py + stage_orchestrator.py\n\n- `context blueprint`\n- `agent profiles`\n- `execution DAG`\n- `stage runners / rerun`\n- `media routing`\n- `review checkpoints`",
                       "color":  "4"
                   },
                   {
@@ -169,7 +169,7 @@
                       "y":  460,
                       "width":  340,
                       "height":  180,
-                      "text":  "# runtime_store.py\n\n- 静态快照写入\n- 动态 `context packet`\n- 动态 `task update`\n- `events.jsonl`",
+                      "text":  "# runtime_store.py\n\n- 静态快照写入\n- 动态 `context packet`\n- 动态 `task update`\n- `events.jsonl`\n- trace summary 聚合",
                       "color":  "1"
                   },
                   {
@@ -198,7 +198,7 @@
                       "y":  -320,
                       "width":  360,
                       "height":  220,
-                      "text":  "# Session Runtime\n\n`runtime/sessions/\u003csession_id\u003e/`\n\n- 协作链路：`context-packets/*.json`\n- 状态推进：`task-updates/*.json`\n- 最近快照：`*-latest.json`\n- 审计：`events.jsonl`"
+                      "text":  "# Session Runtime\n\n`runtime/sessions/\u003csession_id\u003e/`\n\n- 协作链路：`context-packets/*.json`\n- 状态推进：`task-updates/*.json`\n- LLM traces：`traces/*.json`\n- 最近快照：`*-latest.json`\n- 审计：`events.jsonl`"
                   },
                   {
                       "id":  "node-outputs",

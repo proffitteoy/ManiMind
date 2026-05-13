@@ -1,11 +1,13 @@
 #!/usr/bin/env python
-"""基于 F5-TTS 生成配音（绕过 torchaudio.load 的 torchcodec 依赖问题）。"""
+"""Generate wav with F5-TTS while keeping full reference audio when requested."""
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 from pathlib import Path
+import tempfile
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -21,6 +23,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional HuggingFace cache root for model/vocoder reuse.",
     )
     parser.add_argument("--device", default="cpu", help="cpu/cuda/xpu/mps")
+    parser.add_argument(
+        "--ref-min-seconds",
+        type=float,
+        default=0.0,
+        help="Require effective reference audio duration to be >= this value.",
+    )
+    parser.add_argument(
+        "--max-total-seconds",
+        type=float,
+        default=30.0,
+        help="Target total seconds per batch (reference + generated) for text chunking.",
+    )
     parser.add_argument("--remove-silence", action="store_true")
     return parser
 
@@ -53,6 +67,58 @@ def _load_audio_tensor_with_soundfile(path: str):
     else:
         audio = torch.from_numpy(np.transpose(audio_np, (1, 0)))
     return audio, sample_rate
+
+
+def _normalize_reference_text(text: str) -> str:
+    normalized = text.strip()
+    if not normalized:
+        return normalized
+    if not normalized.endswith(". ") and not normalized.endswith("。"):
+        if normalized.endswith("."):
+            normalized += " "
+        else:
+            normalized += ". "
+    return normalized
+
+
+def _prepare_reference_audio_without_short_clip(
+    ui,
+    ref_audio: str,
+    ref_text: str,
+) -> tuple[str, str]:
+    from pydub import AudioSegment
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    audio_seg = AudioSegment.from_file(ref_audio)
+    audio_seg.export(str(tmp_path), format="wav")
+
+    if ref_text.strip():
+        resolved_ref_text = ref_text
+    else:
+        print("No reference text provided, transcribing full reference audio...", flush=True)
+        resolved_ref_text = ui.transcribe(str(tmp_path))
+
+    return str(tmp_path), _normalize_reference_text(resolved_ref_text)
+
+
+def _prepare_reference_audio(ui, ref_audio: str, ref_text: str) -> tuple[str, str, Path | None]:
+    preprocess_sig = inspect.signature(ui.preprocess_ref_audio_text)
+    if "clip_short" in preprocess_sig.parameters:
+        processed_audio, processed_text = ui.preprocess_ref_audio_text(
+            ref_audio,
+            ref_text,
+            clip_short=False,
+        )
+        return processed_audio, processed_text, None
+
+    processed_audio, processed_text = _prepare_reference_audio_without_short_clip(
+        ui,
+        ref_audio,
+        ref_text,
+    )
+    return processed_audio, processed_text, Path(processed_audio)
 
 
 def main() -> None:
@@ -88,14 +154,41 @@ def main() -> None:
     )
 
     print("preprocessing_reference_audio...", flush=True)
-    ref_audio_prep, ref_text = ui.preprocess_ref_audio_text(args.ref_audio, args.ref_text)
-    audio, sample_rate = _load_audio_tensor_with_soundfile(ref_audio_prep)
+    cleanup_audio: Path | None = None
+    ref_audio_prep, ref_text, cleanup_audio = _prepare_reference_audio(
+        ui,
+        args.ref_audio,
+        args.ref_text,
+    )
+    try:
+        audio, sample_rate = _load_audio_tensor_with_soundfile(ref_audio_prep)
+    finally:
+        if cleanup_audio is not None and cleanup_audio.exists():
+            cleanup_audio.unlink(missing_ok=True)
 
-    # 复用 infer_process 的分段策略，但避免内部 torchaudio.load。
+    ref_duration_seconds = audio.shape[-1] / sample_rate
+    print(f"reference_audio_seconds={ref_duration_seconds:.2f}", flush=True)
+    if args.ref_min_seconds > 0 and ref_duration_seconds + 1e-6 < args.ref_min_seconds:
+        import torch
+
+        pad_seconds = args.ref_min_seconds - ref_duration_seconds
+        pad_samples = int(round(pad_seconds * sample_rate))
+        if pad_samples > 0:
+            pad = torch.zeros((audio.shape[0], pad_samples), dtype=audio.dtype)
+            audio = torch.cat([audio, pad], dim=-1)
+            ref_duration_seconds = audio.shape[-1] / sample_rate
+            print(
+                "reference_audio_padded_seconds="
+                f"{ref_duration_seconds:.2f} (target={args.ref_min_seconds:.2f})",
+                flush=True,
+            )
+
+    # Keep each chunk within model total-duration budget.
+    chunk_budget_seconds = max(args.max_total_seconds - ref_duration_seconds, 1.0)
     max_chars = int(
         len(ref_text.encode("utf-8"))
-        / (audio.shape[-1] / sample_rate)
-        * (22 - audio.shape[-1] / sample_rate)
+        / max(ref_duration_seconds, 1e-6)
+        * chunk_budget_seconds
         * ui.speed
     )
     if max_chars < 20:

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 from typing import Any
 
 from .llm_client import (
@@ -25,6 +26,7 @@ from .prompt_system import (
     svg_worker_recipe,
 )
 from .runtime_store import persist_context_packet
+from .trace_store import LLMTrace, persist_llm_trace
 
 
 def _safe_id(value: str) -> str:
@@ -147,6 +149,20 @@ def _locate_rendered_video(media_dir: Path, scene_class: str) -> Path | None:
     return None
 
 
+def _context_keys_from_packet(packet: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    specs = packet.get("context_specs")
+    if not isinstance(specs, list):
+        return keys
+    for item in specs:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        if isinstance(key, str):
+            keys.append(key)
+    return keys
+
+
 def _render_scene(
     *,
     manim_bin: str,
@@ -234,6 +250,7 @@ class HtmlWorkerAdapter:
             prompt_sections=bundle.prompt_sections,
         )
         cfg = load_llm_runtime_config()
+        t0 = time.perf_counter()
         try:
             html_text, meta = generate_text_for_role(
                 cfg=cfg,
@@ -242,7 +259,56 @@ class HtmlWorkerAdapter:
                 prompt=bundle.user_prompt,
             )
         except LLMRequestError as exc:
+            persist_llm_trace(
+                plan=plan,
+                session_id=session_id,
+                trace=LLMTrace(
+                    trace_id=f"{task.id}-{int(time.time() * 1000)}",
+                    role_id=task.owner_role,
+                    stage=PipelineStage.DISPATCH.value,
+                    task_id=task.id,
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    input_context_keys=_context_keys_from_packet(bundle.packet),
+                    prompt_sections=bundle.prompt_sections,
+                    model_route="worker",
+                    model_output_excerpt=str(exc)[:2000],
+                    parsed_output_keys=[],
+                    schema_validation="n/a",
+                    artifact_files=[],
+                    render_command=None,
+                    render_exit_code=None,
+                    duration_ms=int((time.perf_counter() - t0) * 1000),
+                    token_usage=None,
+                    retry_count=0,
+                    failure_reason=f"worker_output_invalid:{exc}",
+                ),
+            )
             raise WorkerExecutionError(f"html_llm_failed:{exc}") from exc
+
+        persist_llm_trace(
+            plan=plan,
+            session_id=session_id,
+            trace=LLMTrace(
+                trace_id=f"{task.id}-{int(time.time() * 1000)}",
+                role_id=task.owner_role,
+                stage=PipelineStage.DISPATCH.value,
+                task_id=task.id,
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                input_context_keys=_context_keys_from_packet(bundle.packet),
+                prompt_sections=bundle.prompt_sections,
+                model_route=str(meta.get("route") or "worker"),
+                model_output_excerpt=html_text[:2000],
+                parsed_output_keys=[],
+                schema_validation="n/a",
+                artifact_files=[],
+                render_command=None,
+                render_exit_code=None,
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+                token_usage=None,
+                retry_count=0,
+                failure_reason=None,
+            ),
+        )
 
         html_path.write_text(_ensure_html_document(html_text), encoding="utf-8")
 
@@ -314,6 +380,7 @@ class SvgWorkerAdapter:
             prompt_sections=bundle.prompt_sections,
         )
         cfg = load_llm_runtime_config()
+        t0 = time.perf_counter()
         try:
             svg_text, meta = generate_text_for_role(
                 cfg=cfg,
@@ -322,7 +389,56 @@ class SvgWorkerAdapter:
                 prompt=bundle.user_prompt,
             )
         except LLMRequestError as exc:
+            persist_llm_trace(
+                plan=plan,
+                session_id=session_id,
+                trace=LLMTrace(
+                    trace_id=f"{task.id}-{int(time.time() * 1000)}",
+                    role_id=task.owner_role,
+                    stage=PipelineStage.DISPATCH.value,
+                    task_id=task.id,
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    input_context_keys=_context_keys_from_packet(bundle.packet),
+                    prompt_sections=bundle.prompt_sections,
+                    model_route="worker",
+                    model_output_excerpt=str(exc)[:2000],
+                    parsed_output_keys=[],
+                    schema_validation="n/a",
+                    artifact_files=[],
+                    render_command=None,
+                    render_exit_code=None,
+                    duration_ms=int((time.perf_counter() - t0) * 1000),
+                    token_usage=None,
+                    retry_count=0,
+                    failure_reason=f"worker_output_invalid:{exc}",
+                ),
+            )
             raise WorkerExecutionError(f"svg_llm_failed:{exc}") from exc
+
+        persist_llm_trace(
+            plan=plan,
+            session_id=session_id,
+            trace=LLMTrace(
+                trace_id=f"{task.id}-{int(time.time() * 1000)}",
+                role_id=task.owner_role,
+                stage=PipelineStage.DISPATCH.value,
+                task_id=task.id,
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                input_context_keys=_context_keys_from_packet(bundle.packet),
+                prompt_sections=bundle.prompt_sections,
+                model_route=str(meta.get("route") or "worker"),
+                model_output_excerpt=svg_text[:2000],
+                parsed_output_keys=[],
+                schema_validation="n/a",
+                artifact_files=[],
+                render_command=None,
+                render_exit_code=None,
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+                token_usage=None,
+                retry_count=0,
+                failure_reason=None,
+            ),
+        )
 
         svg_path.write_text(_ensure_svg_document(svg_text), encoding="utf-8")
         return WorkerRunResult(
@@ -428,6 +544,7 @@ class ManimWorkerAdapter:
         )
 
         cfg = load_llm_runtime_config()
+        t0 = time.perf_counter()
         try:
             code, meta = generate_text_for_role(
                 cfg=cfg,
@@ -436,7 +553,56 @@ class ManimWorkerAdapter:
                 prompt=bundle.user_prompt,
             )
         except LLMRequestError as exc:
+            persist_llm_trace(
+                plan=plan,
+                session_id=session_id,
+                trace=LLMTrace(
+                    trace_id=f"{task.id}-{int(time.time() * 1000)}",
+                    role_id=task.owner_role,
+                    stage=PipelineStage.DISPATCH.value,
+                    task_id=task.id,
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    input_context_keys=_context_keys_from_packet(bundle.packet),
+                    prompt_sections=bundle.prompt_sections,
+                    model_route="worker",
+                    model_output_excerpt=str(exc)[:2000],
+                    parsed_output_keys=[],
+                    schema_validation="n/a",
+                    artifact_files=[],
+                    render_command=None,
+                    render_exit_code=None,
+                    duration_ms=int((time.perf_counter() - t0) * 1000),
+                    token_usage=None,
+                    retry_count=0,
+                    failure_reason=f"worker_output_invalid:{exc}",
+                ),
+            )
             raise WorkerExecutionError(f"manim_llm_failed:{exc}") from exc
+
+        persist_llm_trace(
+            plan=plan,
+            session_id=session_id,
+            trace=LLMTrace(
+                trace_id=f"{task.id}-{int(time.time() * 1000)}",
+                role_id=task.owner_role,
+                stage=PipelineStage.DISPATCH.value,
+                task_id=task.id,
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                input_context_keys=_context_keys_from_packet(bundle.packet),
+                prompt_sections=bundle.prompt_sections,
+                model_route=str(meta.get("route") or "worker"),
+                model_output_excerpt=code[:2000],
+                parsed_output_keys=[],
+                schema_validation="n/a",
+                artifact_files=[],
+                render_command=None,
+                render_exit_code=None,
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+                token_usage=None,
+                retry_count=0,
+                failure_reason=None,
+            ),
+        )
 
         current_code = _strip_markdown_fences(code) + "\n"
         final_log = ""
@@ -520,6 +686,7 @@ class ManimWorkerAdapter:
                 packet=repair_bundle.packet,
                 prompt_sections=repair_bundle.prompt_sections,
             )
+            repair_t0 = time.perf_counter()
             try:
                 repaired_code, last_meta = generate_text_for_role(
                     cfg=cfg,
@@ -528,7 +695,55 @@ class ManimWorkerAdapter:
                     prompt=repair_bundle.user_prompt,
                 )
             except LLMRequestError as exc:
+                persist_llm_trace(
+                    plan=plan,
+                    session_id=session_id,
+                    trace=LLMTrace(
+                        trace_id=f"{task.id}-repair-{attempt}-{int(time.time() * 1000)}",
+                        role_id=task.owner_role,
+                        stage=PipelineStage.DISPATCH.value,
+                        task_id=task.id,
+                        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        input_context_keys=_context_keys_from_packet(repair_bundle.packet),
+                        prompt_sections=repair_bundle.prompt_sections,
+                        model_route="worker",
+                        model_output_excerpt=str(exc)[:2000],
+                        parsed_output_keys=[],
+                        schema_validation="n/a",
+                        artifact_files=[],
+                        render_command=None,
+                        render_exit_code=None,
+                        duration_ms=int((time.perf_counter() - repair_t0) * 1000),
+                        token_usage=None,
+                        retry_count=attempt,
+                        failure_reason=f"worker_output_invalid:{exc}",
+                    ),
+                )
                 raise WorkerExecutionError(f"manim_repair_failed:{exc}") from exc
+            persist_llm_trace(
+                plan=plan,
+                session_id=session_id,
+                trace=LLMTrace(
+                    trace_id=f"{task.id}-repair-{attempt}-{int(time.time() * 1000)}",
+                    role_id=task.owner_role,
+                    stage=PipelineStage.DISPATCH.value,
+                    task_id=task.id,
+                    timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    input_context_keys=_context_keys_from_packet(repair_bundle.packet),
+                    prompt_sections=repair_bundle.prompt_sections,
+                    model_route=str(last_meta.get("route") or "worker"),
+                    model_output_excerpt=repaired_code[:2000],
+                    parsed_output_keys=[],
+                    schema_validation="n/a",
+                    artifact_files=[],
+                    render_command=None,
+                    render_exit_code=None,
+                    duration_ms=int((time.perf_counter() - repair_t0) * 1000),
+                    token_usage=None,
+                    retry_count=attempt,
+                    failure_reason=None,
+                ),
+            )
             current_code = _strip_markdown_fences(repaired_code) + "\n"
 
         raise WorkerExecutionError("manim_repair_loop_unreachable")
@@ -608,4 +823,3 @@ def render_html_to_video(html_dir: Path, output_path: Path, *, fps: int = 30) ->
     if not output_path.exists():
         raise WorkerExecutionError("html_render_no_output")
     return output_path
-

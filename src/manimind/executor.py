@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any
 
-from .artifact_store import has_output_key, write_output_key
+from .artifact_store import has_output_key, output_path_for_key, write_output_key
+from .bootstrap import sanitize_identifier
+from .contract_store import (
+    planner_segment_priority_fields,
+    required_fields_for_role,
+    validate_role_output,
+)
 from .context_assembly import PromptSectionCache
+from .failure import classify_failure
 from .ingest import concatenate_documents, load_source_documents
 from .llm_client import (
     LLMRequestError,
@@ -21,6 +29,7 @@ from .llm_client import (
     load_llm_runtime_config,
 )
 from .models import EventType, ExecutionTask, PipelineStage, ProjectPlan, TaskStatus
+from .ownership import ensure_role_can_write_key
 from .prompt_system import (
     PromptRecipe,
     build_prompt_bundle,
@@ -38,6 +47,7 @@ from .runtime_store import (
     persist_task_update,
 )
 from .task_board import update_execution_task_status
+from .trace_store import LLMTrace, persist_llm_trace
 from .worker_adapters import WorkerExecutionError, render_with_worker
 
 
@@ -128,6 +138,31 @@ def _coerce_str_list(value: Any, *, limit: int) -> list[str]:
     return output
 
 
+def _coerce_str(value: Any, *, default: str = "") -> str:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return default
+
+
+def _coerce_positive_int(value: Any, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value if value > 0 else default
+    if isinstance(value, float):
+        converted = int(value)
+        return converted if converted > 0 else default
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            converted = int(stripped)
+            if converted > 0:
+                return converted
+    return default
+
+
 def _coerce_formula_catalog(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -165,6 +200,102 @@ def _coerce_summary_text(value: Any) -> str:
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
     return ""
+
+
+def _field_has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _coerce_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    return [value]
+
+
+def _normalize_role_output(
+    role_id: str,
+    payload: dict[str, Any],
+    plan: ProjectPlan,
+) -> dict[str, Any]:
+    normalized = dict(payload)
+    if role_id == "explorer":
+        normalized["document_findings"] = _coerce_list(payload.get("document_findings"))
+        normalized["formula_candidates"] = _coerce_list(payload.get("formula_candidates"))
+        normalized["glossary_candidates"] = _coerce_list(payload.get("glossary_candidates"))
+        normalized["story_beats"] = _coerce_list(payload.get("story_beats"))
+        normalized["risk_flags"] = _coerce_list(payload.get("risk_flags"))
+        normalized["source_highlights"] = _coerce_list(payload.get("source_highlights"))
+        return normalized
+
+    if role_id == "lead":
+        summary_source = payload.get("research_summary")
+        if summary_source is None:
+            summary_source = payload.get("summary")
+        normalized["research_summary"] = _coerce_summary_text(summary_source)
+        normalized["glossary_terms"] = _coerce_str_list(
+            payload.get("glossary_terms"),
+            limit=32,
+        )
+        normalized["formula_catalog"] = _coerce_formula_catalog(
+            payload.get("formula_catalog")
+        )
+        normalized["style_guide"] = _coerce_str_list(
+            payload.get("style_guide"),
+            limit=32,
+        )
+        return normalized
+
+    if role_id == "planner":
+        normalized["segment_priorities"] = _normalize_segment_priorities(
+            plan,
+            payload.get("segment_priorities"),
+        )
+        normalized["must_checks"] = _coerce_str_list(payload.get("must_checks"), limit=32)
+        normalized["risk_flags"] = _coerce_str_list(payload.get("risk_flags"), limit=32)
+        normalized["visual_briefs"] = _coerce_list(payload.get("visual_briefs"))
+        normalized["narrative_arc"] = _coerce_str_list(payload.get("narrative_arc"), limit=32)
+        return normalized
+
+    if role_id == "coordinator":
+        normalized["script_outline"] = _normalize_storyboard_outline(
+            plan,
+            payload.get("script_outline"),
+        )
+        storyboard_master = payload.get("storyboard_master")
+        handoff_notes = payload.get("handoff_notes")
+        normalized["storyboard_master"] = storyboard_master if isinstance(storyboard_master, dict) else {}
+        normalized["handoff_notes"] = handoff_notes if isinstance(handoff_notes, dict) else {}
+        quality_self_check = payload.get("quality_self_check")
+        if quality_self_check is not None and not isinstance(quality_self_check, dict):
+            normalized["quality_self_check"] = {}
+        return normalized
+
+    if role_id == "reviewer":
+        normalized["summary"] = _coerce_summary_text(payload.get("summary"))
+        normalized["decision"] = _coerce_str(
+            payload.get("decision"),
+            default="pending_human_confirmation",
+        )
+        normalized["risk_notes"] = _coerce_str_list(payload.get("risk_notes"), limit=32)
+        normalized["must_check"] = _coerce_str_list(payload.get("must_check"), limit=32)
+        normalized["evidence_checks"] = _coerce_list(payload.get("evidence_checks"))
+        script_quality = payload.get("script_quality")
+        if script_quality is not None and not isinstance(script_quality, dict):
+            normalized["script_quality"] = {}
+        return_recommendation = payload.get("return_recommendation_if_needed")
+        if return_recommendation is not None and not isinstance(return_recommendation, dict):
+            normalized["return_recommendation_if_needed"] = {}
+        return normalized
+
+    return normalized
 
 
 def _default_storyboard_outline(plan: ProjectPlan) -> list[dict[str, Any]]:
@@ -231,8 +362,9 @@ def _normalize_storyboard_outline(
                 "goal": segment.goal,
                 "narration": segment.narration,
                 "modality": segment.modality.value,
-                "estimated_seconds": int(
-                    item.get("estimated_seconds") or segment.estimated_seconds
+                "estimated_seconds": _coerce_positive_int(
+                    item.get("estimated_seconds"),
+                    default=segment.estimated_seconds,
                 ),
                 "formulas": segment.formulas,
                 "html_motion_notes": segment.html_motion_notes,
@@ -260,31 +392,234 @@ def _normalize_segment_priorities(
             if isinstance(segment_id, str) and segment_id.strip():
                 candidate_map[segment_id.strip()] = item
 
+    schema_fields = set(planner_segment_priority_fields())
     normalized: list[dict[str, Any]] = []
     for segment in plan.segments:
         candidate = candidate_map.get(segment.id, {})
         objective = candidate.get("objective")
         primary_worker = candidate.get("primary_worker_path")
         estimated = candidate.get("estimated_seconds")
-        normalized.append(
+        semantic_type = candidate.get("semantic_type")
+        cognitive_goal = candidate.get("cognitive_goal")
+        why_this_worker = candidate.get("why_this_worker")
+        density_level = candidate.get("density_level")
+        prerequisites = candidate.get("prerequisites")
+        normalized_entry: dict[str, Any] = {
+            "segment_id": segment.id,
+            "objective": (
+                objective.strip()
+                if isinstance(objective, str) and objective.strip()
+                else segment.goal
+            ),
+            "primary_worker_path": (
+                primary_worker.strip()
+                if isinstance(primary_worker, str) and primary_worker.strip()
+                else segment.modality.value
+            ),
+            "estimated_seconds": _coerce_positive_int(
+                estimated,
+                default=segment.estimated_seconds,
+            ),
+        }
+        optional_values: dict[str, Any] = {
+            "semantic_type": _coerce_str(semantic_type, default=""),
+            "cognitive_goal": _coerce_str(cognitive_goal, default=""),
+            "why_this_worker": _coerce_str(why_this_worker, default=""),
+            "density_level": _coerce_str(density_level, default="medium"),
+            "prerequisites": _coerce_str_list(prerequisites, limit=5),
+        }
+        for key, field_value in optional_values.items():
+            if schema_fields and key not in schema_fields:
+                continue
+            normalized_entry[key] = field_value
+        normalized.append(normalized_entry)
+    return normalized
+
+
+def _ensure_role_ownership(
+    plan: ProjectPlan,
+    role_id: str,
+    output_keys: list[str] | tuple[str, ...],
+) -> None:
+    for key in output_keys:
+        ensure_role_can_write_key(plan, role_id, key)
+
+
+def _write_role_output(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+    role_id: str,
+    key: str,
+    payload: dict[str, Any],
+) -> Path:
+    _ensure_role_ownership(plan, role_id, [key])
+    return write_output_key(
+        plan=plan,
+        session_id=session_id,
+        key=key,
+        payload=payload,
+    )
+
+
+def _read_output_payload(
+    plan: ProjectPlan,
+    session_id: str,
+    key: str,
+) -> dict[str, Any] | None:
+    path = output_path_for_key(plan, session_id, key)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _require_output_payload(
+    plan: ProjectPlan,
+    session_id: str,
+    key: str,
+) -> dict[str, Any]:
+    payload = _read_output_payload(plan, session_id, key)
+    if payload is None:
+        raise RuntimeError(f"missing_required_outputs:{key}")
+    return payload
+
+
+def _load_summarize_context(plan: ProjectPlan, session_id: str) -> dict[str, Any]:
+    summary_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.research.summary"
+    )
+    glossary_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.glossary"
+    )
+    formula_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.formula.catalog"
+    )
+    style_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.style.guide"
+    )
+    explorer_payload = _read_output_payload(
+        plan, session_id, f"{plan.project_id}.session.explorer.findings"
+    ) or {}
+    return {
+        "research_summary": str(summary_payload.get("summary") or "").strip(),
+        "glossary_terms": _coerce_str_list(glossary_payload.get("terms"), limit=12),
+        "formula_catalog": _coerce_formula_catalog(formula_payload.get("items")),
+        "style_guide": _coerce_str_list(style_payload.get("items"), limit=12),
+        "source_highlights": _coerce_str_list(summary_payload.get("source_highlights"), limit=12),
+        "explorer_story_beats": _coerce_str_list(explorer_payload.get("story_beats"), limit=12),
+        "explorer_risk_flags": _coerce_str_list(summary_payload.get("risk_flags"), limit=12),
+    }
+
+
+def _load_plan_context(plan: ProjectPlan, session_id: str) -> dict[str, Any]:
+    narration_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.narration.script"
+    )
+    storyboard_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.storyboard.master"
+    )
+    handoff_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.session.handoff"
+    )
+    storyboard_outline = narration_payload.get("script_outline")
+    if not isinstance(storyboard_outline, list):
+        storyboard_outline = []
+    planner_brief = narration_payload.get("planner_brief")
+    if not isinstance(planner_brief, dict):
+        planner_brief = {}
+    handoff_notes = handoff_payload.get("handoff_notes")
+    if not isinstance(handoff_notes, dict):
+        handoff_notes = storyboard_payload.get("handoff_notes")
+    if not isinstance(handoff_notes, dict):
+        handoff_notes = {}
+    storyboard_master = storyboard_payload.get("storyboard_master")
+    if not isinstance(storyboard_master, dict):
+        storyboard_master = {}
+    return {
+        "storyboard_outline": [item for item in storyboard_outline if isinstance(item, dict)],
+        "planner_brief": planner_brief,
+        "handoff_notes": handoff_notes,
+        "storyboard_master": storyboard_master,
+    }
+
+
+def _required_field_checks(
+    role_id: str,
+    payload: dict[str, Any],
+    source: str,
+) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for field in required_fields_for_role(role_id):
+        present = _field_has_value(payload.get(field))
+        checks.append(
             {
-                "segment_id": segment.id,
-                "objective": (
-                    objective.strip()
-                    if isinstance(objective, str) and objective.strip()
-                    else segment.goal
-                ),
-                "primary_worker_path": (
-                    primary_worker.strip()
-                    if isinstance(primary_worker, str) and primary_worker.strip()
-                    else segment.modality.value
-                ),
-                "estimated_seconds": int(estimated)
-                if isinstance(estimated, int) and estimated > 0
-                else segment.estimated_seconds,
+                "name": f"{role_id}.{field}",
+                "source": source,
+                "status": "ok" if present else "missing",
             }
         )
-    return normalized
+    return checks
+
+
+def _build_schema_evidence_checks(
+    plan_context: dict[str, Any],
+    render_evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    planner_brief = plan_context.get("planner_brief")
+    if not isinstance(planner_brief, dict):
+        planner_brief = {}
+    storyboard_master = plan_context.get("storyboard_master")
+    if not isinstance(storyboard_master, dict):
+        storyboard_master = {}
+    coordinator_payload = {
+        "script_outline": plan_context.get("storyboard_outline"),
+        "storyboard_master": storyboard_master,
+        "handoff_notes": plan_context.get("handoff_notes"),
+    }
+
+    checks: list[dict[str, Any]] = []
+    checks.extend(
+        _required_field_checks(
+            role_id="planner",
+            payload=planner_brief,
+            source="planner_brief",
+        )
+    )
+    checks.extend(
+        _required_field_checks(
+            role_id="coordinator",
+            payload=coordinator_payload,
+            source="storyboard_and_handoff",
+        )
+    )
+    checks.append(
+        {
+            "name": "dispatch.render_evidence",
+            "source": "review_evidence",
+            "status": "ok" if len(render_evidence) > 0 else "missing",
+            "actual_count": len(render_evidence),
+        }
+    )
+    return checks
+
+
+def _merge_evidence_checks(
+    schema_checks: list[dict[str, Any]],
+    reviewer_checks: Any,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = list(schema_checks)
+    if not isinstance(reviewer_checks, list):
+        return merged
+    for item in reviewer_checks:
+        if isinstance(item, dict):
+            merged.append(item)
+    return merged
 
 
 def _task_by_id(plan: ProjectPlan, task_id: str) -> ExecutionTask:
@@ -369,6 +704,7 @@ def _call_json_role(
     session_id: str,
     role_id: str,
     stage: PipelineStage,
+    task_id: str,
     recipe: PromptRecipe,
     payload: dict[str, Any],
     prompt_cache: PromptSectionCache,
@@ -390,12 +726,79 @@ def _call_json_role(
         packet=bundle.packet,
         prompt_sections=bundle.prompt_sections,
     )
-    return generate_json_for_role(
-        cfg=cfg,
-        role_id=role_id,
-        instructions=bundle.system_prompt,
-        prompt=bundle.user_prompt,
-    )
+    context_keys = [
+        item.get("key")
+        for item in bundle.packet.get("context_specs", [])
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    ]
+    t0 = time.perf_counter()
+    trace_id = f"{sanitize_identifier(session_id)}-{sanitize_identifier(role_id)}-{int(time.time() * 1000)}"
+    route_label = "unknown"
+    try:
+        parsed, meta = generate_json_for_role(
+            cfg=cfg,
+            role_id=role_id,
+            instructions=bundle.system_prompt,
+            prompt=bundle.user_prompt,
+        )
+        if isinstance(parsed, dict):
+            parsed = _normalize_role_output(role_id, parsed, plan)
+        schema_error = validate_role_output(role_id, parsed)
+        if schema_error:
+            raise ValueError(f"schema_validation_failed:{schema_error}")
+        route_label = str(meta.get("route") or "unknown")
+        persist_llm_trace(
+            plan=plan,
+            session_id=session_id,
+            trace=LLMTrace(
+                trace_id=trace_id,
+                role_id=role_id,
+                stage=stage.value,
+                task_id=task_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                input_context_keys=context_keys,
+                prompt_sections=bundle.prompt_sections,
+                model_route=route_label,
+                model_output_excerpt=json.dumps(parsed, ensure_ascii=False)[:2000],
+                parsed_output_keys=list(parsed.keys()),
+                schema_validation="pass",
+                artifact_files=[],
+                render_command=None,
+                render_exit_code=None,
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+                token_usage=None,
+                retry_count=0,
+                failure_reason=None,
+            ),
+        )
+        return parsed, meta
+    except Exception as exc:
+        category = classify_failure(exc)
+        persist_llm_trace(
+            plan=plan,
+            session_id=session_id,
+            trace=LLMTrace(
+                trace_id=trace_id,
+                role_id=role_id,
+                stage=stage.value,
+                task_id=task_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                input_context_keys=context_keys,
+                prompt_sections=bundle.prompt_sections,
+                model_route=route_label,
+                model_output_excerpt=str(exc)[:2000],
+                parsed_output_keys=[],
+                schema_validation=f"fail:{category.value}",
+                artifact_files=[],
+                render_command=None,
+                render_exit_code=None,
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+                token_usage=None,
+                retry_count=0,
+                failure_reason=f"{category.value}:{exc}",
+            ),
+        )
+        raise
 
 
 def _document_payloads(docs: list[Any]) -> list[dict[str, Any]]:
@@ -548,38 +951,41 @@ def _get_audio_duration(audio_path: Path) -> float:
     return max(1.0, size / 32000.0)
 
 
-def run_to_review(
-    plan: ProjectPlan,
-    session_id: str,
-    source_manifest: str,
-) -> dict[str, Any]:
-    """把计划推进到 REVIEW 阶段（含 review.draft）。"""
-    _log_progress(session_id, "run-to-review", f"start project={plan.project_id}")
-    persist_plan_snapshot(plan=plan, session_id=session_id, source_manifest=source_manifest)
-    load_execution_task_snapshot(plan)
-
-    cfg = load_llm_runtime_config()
-    prompt_cache = PromptSectionCache()
-
+def _load_sources(plan: ProjectPlan) -> dict[str, Any]:
     docs = load_source_documents(plan.source_bundle, base_dir=Path.cwd())
     source_text = concatenate_documents(docs)
     source_excerpt = source_text[:12000] if source_text else ""
-    seed_formulas = _extract_formulas(source_text)
-    seed_glossary = _extract_glossary_seeds(source_text)
+    return {
+        "docs": docs,
+        "source_text": source_text,
+        "source_excerpt": source_excerpt,
+        "seed_formulas": _extract_formulas(source_text),
+        "seed_glossary": _extract_glossary_seeds(source_text),
+    }
+
+
+def run_ingest_stage(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+) -> dict[str, Any]:
+    bundle = _load_sources(plan)
+    docs = bundle["docs"]
+    source_text = bundle["source_text"]
     _log_progress(
         session_id,
         "ingest",
         f"loaded_docs={len(docs)} source_chars={len(source_text)}",
     )
-
     ingest_payload = {
         "source_bundle": plan.source_bundle.to_dict(),
         "documents": [item.to_dict() for item in docs],
         "note": "ingest complete",
     }
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="lead",
         key=f"{plan.project_id}.session.handoff",
         payload={
             "project_id": plan.project_id,
@@ -589,7 +995,26 @@ def run_to_review(
     )
     _complete_task(plan, session_id, "ingest.sources", "lead")
     _log_progress(session_id, "ingest", "ingest.sources completed")
+    return {
+        "source_excerpt": bundle["source_excerpt"],
+        "seed_formulas": bundle["seed_formulas"],
+        "seed_glossary": bundle["seed_glossary"],
+        "documents": _document_payloads(docs),
+    }
 
+
+def run_summarize_stage(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+    cfg: LLMRuntimeConfig,
+    prompt_cache: PromptSectionCache,
+) -> dict[str, Any]:
+    source_bundle = _load_sources(plan)
+    docs = source_bundle["docs"]
+    source_excerpt = source_bundle["source_excerpt"]
+    seed_formulas = source_bundle["seed_formulas"]
+    seed_glossary = source_bundle["seed_glossary"]
     explorer_payload = {
         "project_id": plan.project_id,
         "title": plan.title,
@@ -607,35 +1032,20 @@ def run_to_review(
         session_id=session_id,
         role_id="explorer",
         stage=PipelineStage.SUMMARIZE,
+        task_id="explore.references",
         recipe=explorer_recipe(),
         payload=explorer_payload,
         prompt_cache=prompt_cache,
     )
-    _log_progress(session_id, "explorer", "llm output received")
-    explorer_formulas = _coerce_str_list(
-        explorer_findings.get("formula_candidates"),
-        limit=16,
-    )
+    explorer_formulas = _coerce_str_list(explorer_findings.get("formula_candidates"), limit=16)
     if not explorer_formulas:
         explorer_formulas = seed_formulas
-    explorer_glossary = _coerce_str_list(
-        explorer_findings.get("glossary_candidates"),
-        limit=12,
-    )
+    explorer_glossary = _coerce_str_list(explorer_findings.get("glossary_candidates"), limit=12)
     if not explorer_glossary:
         explorer_glossary = seed_glossary
-    explorer_story_beats = _coerce_str_list(
-        explorer_findings.get("story_beats"),
-        limit=12,
-    )
-    explorer_risk_flags = _coerce_str_list(
-        explorer_findings.get("risk_flags"),
-        limit=12,
-    )
-    source_highlights = _coerce_str_list(
-        explorer_findings.get("source_highlights"),
-        limit=12,
-    )
+    explorer_story_beats = _coerce_str_list(explorer_findings.get("story_beats"), limit=12)
+    explorer_risk_flags = _coerce_str_list(explorer_findings.get("risk_flags"), limit=12)
+    source_highlights = _coerce_str_list(explorer_findings.get("source_highlights"), limit=12)
     document_findings = explorer_findings.get("document_findings")
     if not isinstance(document_findings, list):
         document_findings = _document_payloads(docs)
@@ -663,11 +1073,6 @@ def run_to_review(
             "risk_flags": explorer_risk_flags,
         },
     )
-    _log_progress(
-        session_id,
-        "explorer",
-        f"completed formulas={len(explorer_formulas)} glossary={len(explorer_glossary)}",
-    )
 
     lead_payload = {
         "project_id": plan.project_id,
@@ -691,19 +1096,16 @@ def run_to_review(
         session_id=session_id,
         role_id="lead",
         stage=PipelineStage.SUMMARIZE,
+        task_id="summarize.research",
         recipe=lead_summary_recipe(),
         payload=lead_payload,
         prompt_cache=prompt_cache,
     )
-    research_summary = _coerce_summary_text(
-        lead_outputs.get("research_summary")
-    ) or _coerce_summary_text(lead_outputs.get("summary"))
+    research_summary = _coerce_summary_text(lead_outputs.get("research_summary")) or _coerce_summary_text(lead_outputs.get("summary"))
     if not research_summary:
-        lead_retry_payload = {
+        retry_payload = {
             **lead_payload,
-            "contract_hint": (
-                "Return a non-empty string field `research_summary` in plain Chinese."
-            ),
+            "contract_hint": "Return a non-empty string field `research_summary` in plain Chinese.",
         }
         lead_outputs, lead_meta = _call_json_role(
             cfg=cfg,
@@ -711,15 +1113,15 @@ def run_to_review(
             session_id=session_id,
             role_id="lead",
             stage=PipelineStage.SUMMARIZE,
+            task_id="summarize.research",
             recipe=lead_summary_recipe(),
-            payload=lead_retry_payload,
+            payload=retry_payload,
             prompt_cache=prompt_cache,
         )
-        research_summary = _coerce_summary_text(
-            lead_outputs.get("research_summary")
-        ) or _coerce_summary_text(lead_outputs.get("summary"))
+        research_summary = _coerce_summary_text(lead_outputs.get("research_summary")) or _coerce_summary_text(lead_outputs.get("summary"))
     if not research_summary:
         raise ValueError("invalid_research_summary")
+
     glossary_terms = _coerce_str_list(lead_outputs.get("glossary_terms"), limit=12)
     if not glossary_terms:
         glossary_terms = explorer_glossary
@@ -733,9 +1135,10 @@ def run_to_review(
     if not style_guide:
         style_guide = list(plan.source_bundle.style_refs)
 
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="lead",
         key=f"{plan.project_id}.research.summary",
         payload={
             "project_id": plan.project_id,
@@ -745,9 +1148,10 @@ def run_to_review(
             "llm_generation": lead_meta,
         },
     )
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="lead",
         key=f"{plan.project_id}.glossary",
         payload={
             "project_id": plan.project_id,
@@ -755,9 +1159,10 @@ def run_to_review(
             "llm_generation": lead_meta,
         },
     )
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="lead",
         key=f"{plan.project_id}.formula.catalog",
         payload={
             "project_id": plan.project_id,
@@ -765,9 +1170,10 @@ def run_to_review(
             "llm_generation": lead_meta,
         },
     )
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="lead",
         key=f"{plan.project_id}.style.guide",
         payload={
             "project_id": plan.project_id,
@@ -775,18 +1181,51 @@ def run_to_review(
             "llm_generation": lead_meta,
         },
     )
-    _complete_task(plan, session_id, "summarize.research", "lead")
-    _log_progress(
-        session_id,
-        "lead",
-        f"summarize.research completed glossary={len(glossary_terms)} formulas={len(formula_catalog)}",
+    _write_role_output(
+        plan=plan,
+        session_id=session_id,
+        role_id="lead",
+        key=f"{plan.project_id}.session.explorer.findings",
+        payload={
+            "project_id": plan.project_id,
+            "story_beats": explorer_story_beats,
+            "risk_flags": explorer_risk_flags,
+            "source_highlights": source_highlights,
+        },
     )
+    _complete_task(plan, session_id, "summarize.research", "lead")
+    return {
+        "research_summary": research_summary.strip(),
+        "glossary_terms": glossary_terms,
+        "formula_catalog": formula_catalog,
+        "style_guide": style_guide,
+        "explorer_story_beats": explorer_story_beats,
+        "explorer_risk_flags": explorer_risk_flags,
+        "source_highlights": source_highlights,
+    }
+
+
+def run_plan_stage(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+    cfg: LLMRuntimeConfig,
+    prompt_cache: PromptSectionCache,
+) -> dict[str, Any]:
+    summarize_context = _load_summarize_context(plan, session_id)
+    research_summary = summarize_context["research_summary"]
+    glossary_terms = summarize_context["glossary_terms"]
+    formula_catalog = summarize_context["formula_catalog"]
+    style_guide = summarize_context["style_guide"]
+    explorer_story_beats = summarize_context["explorer_story_beats"]
+    explorer_risk_flags = summarize_context["explorer_risk_flags"]
+    source_highlights = summarize_context["source_highlights"]
 
     planner_payload = {
         "project_id": plan.project_id,
         "title": plan.title,
         "segments": [segment.to_dict() for segment in plan.segments],
-        "research_summary": research_summary.strip(),
+        "research_summary": research_summary,
         "glossary_terms": glossary_terms,
         "formula_catalog": formula_catalog,
         "style_guide": style_guide,
@@ -802,6 +1241,7 @@ def run_to_review(
         session_id=session_id,
         role_id="planner",
         stage=PipelineStage.PLAN,
+        task_id="plan.research_brief",
         recipe=planner_recipe(),
         payload=planner_payload,
         prompt_cache=prompt_cache,
@@ -827,11 +1267,6 @@ def run_to_review(
         payload={"progress_label": "build_plan_brief"},
     )
     _complete_task(plan, session_id, "plan.research_brief", "planner")
-    _log_progress(
-        session_id,
-        "planner",
-        f"plan.research_brief completed segments={len(planner_brief['segment_priorities'])}",
-    )
     persist_agent_message(
         plan=plan,
         session_id=session_id,
@@ -852,7 +1287,7 @@ def run_to_review(
         "audience": plan.source_bundle.audience,
         "style_refs": style_guide,
         "segments": [segment.to_dict() for segment in plan.segments],
-        "research_summary": research_summary.strip(),
+        "research_summary": research_summary,
         "glossary_terms": glossary_terms,
         "formula_catalog": formula_catalog,
         "planner_brief": planner_brief,
@@ -866,6 +1301,7 @@ def run_to_review(
         session_id=session_id,
         role_id="coordinator",
         stage=PipelineStage.PLAN,
+        task_id="plan.storyboard",
         recipe=coordinator_recipe(),
         payload=coordinator_payload,
         prompt_cache=prompt_cache,
@@ -881,9 +1317,10 @@ def run_to_review(
     if not isinstance(storyboard_master, dict):
         storyboard_master = {}
 
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="coordinator",
         key=f"{plan.project_id}.narration.script",
         payload={
             "project_id": plan.project_id,
@@ -895,9 +1332,10 @@ def run_to_review(
             "llm_generation": coordinator_meta,
         },
     )
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="coordinator",
         key=f"{plan.project_id}.storyboard.master",
         payload={
             "project_id": plan.project_id,
@@ -910,9 +1348,10 @@ def run_to_review(
             "llm_generation": coordinator_meta,
         },
     )
-    write_output_key(
+    _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="coordinator",
         key=f"{plan.project_id}.session.handoff",
         payload={
             "project_id": plan.project_id,
@@ -924,13 +1363,7 @@ def run_to_review(
         },
     )
     _complete_task(plan, session_id, "plan.storyboard", "coordinator")
-    _log_progress(
-        session_id,
-        "coordinator",
-        f"plan.storyboard completed outline={len(storyboard_outline)}",
-    )
 
-    # --- TTS 前移：在 workers 之前合成配音，生成 timing_manifest ---
     timing_manifest = _synthesize_and_build_timing(
         plan=plan,
         session_id=session_id,
@@ -938,17 +1371,33 @@ def run_to_review(
         handoff_notes=handoff_notes,
         cfg=cfg,
     )
-    # 将真实时长注入 handoff_notes，供 workers 消费
     if timing_manifest:
         for seg_id, seg_timing in timing_manifest.get("segments", {}).items():
             if seg_id in handoff_notes:
                 handoff_notes[seg_id]["duration_seconds"] = seg_timing["duration_seconds"]
+    return {
+        "planner_brief": planner_brief,
+        "storyboard_outline": storyboard_outline,
+        "handoff_notes": handoff_notes,
+    }
 
+
+def run_dispatch_stage(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+    segment_id: str | None = None,
+) -> dict[str, Any]:
+    summarize_context = _load_summarize_context(plan, session_id)
+    plan_context = _load_plan_context(plan, session_id)
+    planner_brief = plan_context["planner_brief"]
+    storyboard_outline = plan_context["storyboard_outline"]
+    handoff_notes = plan_context["handoff_notes"]
     shared_context = {
-        "research_summary": research_summary.strip(),
-        "glossary_terms": glossary_terms,
-        "formula_catalog": formula_catalog,
-        "style_guide": style_guide,
+        "research_summary": summarize_context["research_summary"],
+        "glossary_terms": summarize_context["glossary_terms"],
+        "formula_catalog": summarize_context["formula_catalog"],
+        "style_guide": summarize_context["style_guide"],
         "planner_brief": planner_brief,
         "storyboard_outline": storyboard_outline,
         "handoff_notes": handoff_notes,
@@ -959,21 +1408,19 @@ def run_to_review(
         for task in plan.execution_tasks
         if task.stage == PipelineStage.DISPATCH
     ]
+    if segment_id:
+        render_tasks = [
+            task for task in render_tasks if _segment_id_from_task(task) == segment_id
+        ]
     render_evidence: list[dict[str, Any]] = []
     runnable_entries: list[dict[str, Any]] = []
 
     for task in render_tasks:
         worker_role = task.owner_role
-        segment_id = _segment_id_from_task(task)
-        segment = _segment_by_id(plan, segment_id)
+        seg_id = _segment_id_from_task(task)
+        segment = _segment_by_id(plan, seg_id)
         planned_worker_path = _planned_primary_worker_path(planner_brief, segment.id)
         worker_kind = _worker_kind_from_role(worker_role)
-        _log_progress(
-            session_id,
-            "dispatch",
-            f"task={task.id} worker={worker_kind} planned={planned_worker_path or 'auto'}",
-        )
-
         if planned_worker_path in {"html", "manim", "svg"} and worker_kind != planned_worker_path:
             persist_agent_message(
                 plan=plan,
@@ -1011,31 +1458,11 @@ def run_to_review(
                     },
                 }
             )
-            _log_progress(session_id, "dispatch", f"task={task.id} skipped_by_plan")
             continue
-
-        runnable_entries.append(
-            {
-                "task": task,
-                "worker_role": worker_role,
-                "segment": segment,
-            }
-        )
+        runnable_entries.append({"task": task, "worker_role": worker_role, "segment": segment})
 
     if runnable_entries:
-        dispatch_workers = min(
-            len(runnable_entries),
-            _read_dispatch_worker_limit(default=3),
-        )
-        _log_progress(
-            session_id,
-            "dispatch",
-            (
-                "parallel_dispatch_start "
-                f"tasks={len(runnable_entries)} max_workers={dispatch_workers}"
-            ),
-        )
-
+        dispatch_workers = min(len(runnable_entries), _read_dispatch_worker_limit(default=3))
         for entry in runnable_entries:
             task = entry["task"]
             worker_role = entry["worker_role"]
@@ -1048,10 +1475,8 @@ def run_to_review(
                 task_id=task.id,
                 payload={"progress_label": "start_render"},
             )
-
         success_by_task_id: dict[str, Any] = {}
         failure_by_task_id: dict[str, str] = {}
-
         with ThreadPoolExecutor(max_workers=dispatch_workers) as pool:
             future_to_entry = {
                 pool.submit(
@@ -1065,7 +1490,6 @@ def run_to_review(
                 ): entry
                 for entry in runnable_entries
             }
-
             for future in as_completed(future_to_entry):
                 entry = future_to_entry[future]
                 task = entry["task"]
@@ -1073,7 +1497,6 @@ def run_to_review(
                 try:
                     render_result = future.result()
                     success_by_task_id[task.id] = render_result
-                    _log_progress(session_id, "dispatch", f"task={task.id} render_done")
                 except WorkerExecutionError as exc:
                     failure_by_task_id[task.id] = str(exc)
                     persist_agent_message(
@@ -1085,7 +1508,7 @@ def run_to_review(
                         task_id=task.id,
                         payload={"blocked_reason": str(exc)},
                     )
-                except Exception as exc:  # pragma: no cover - defensive fallback
+                except Exception as exc:  # pragma: no cover
                     reason = f"unexpected_render_error:{type(exc).__name__}:{exc}"
                     failure_by_task_id[task.id] = reason
                     persist_agent_message(
@@ -1097,12 +1520,10 @@ def run_to_review(
                         task_id=task.id,
                         payload={"blocked_reason": reason},
                     )
-
         for entry in runnable_entries:
             task = entry["task"]
             worker_role = entry["worker_role"]
             segment = entry["segment"]
-
             if task.id in failure_by_task_id:
                 render_evidence.append(
                     {
@@ -1119,10 +1540,10 @@ def run_to_review(
                     }
                 )
                 continue
-
             render_result = success_by_task_id[task.id]
             output_paths: list[str] = []
             for output_key in task.required_outputs:
+                _ensure_role_ownership(plan, worker_role, [output_key])
                 payload = {
                     "project_id": plan.project_id,
                     "task_id": task.id,
@@ -1131,9 +1552,7 @@ def run_to_review(
                     "artifact_files": render_result.artifact_files,
                     "artifact_metadata": render_result.metadata,
                 }
-                output_paths.append(
-                    str(write_output_key(plan, session_id, output_key, payload))
-                )
+                output_paths.append(str(write_output_key(plan, session_id, output_key, payload)))
             _complete_task(plan, session_id, task.id, worker_role)
             persist_agent_message(
                 plan=plan,
@@ -1158,22 +1577,15 @@ def run_to_review(
                     "metadata": render_result.metadata,
                 }
             )
-            _log_progress(
-                session_id,
-                "dispatch",
-                f"task={task.id} completed artifacts={len(render_result.artifact_files)}",
-            )
-
         for entry in runnable_entries:
             task = entry["task"]
             if task.id in failure_by_task_id:
-                raise RuntimeError(
-                    f"render_failed:{task.id}:{failure_by_task_id[task.id]}"
-                )
+                raise RuntimeError(f"render_failed:{task.id}:{failure_by_task_id[task.id]}")
 
-    review_evidence_path = write_output_key(
+    review_evidence_path = _write_role_output(
         plan=plan,
         session_id=session_id,
+        role_id="lead",
         key=f"{plan.project_id}.review.evidence",
         payload={
             "project_id": plan.project_id,
@@ -1183,17 +1595,41 @@ def run_to_review(
             "storyboard_outline": storyboard_outline,
         },
     )
+    return {
+        "render_evidence": render_evidence,
+        "rendered_tasks": [task.id for task in render_tasks],
+        "review_evidence": str(review_evidence_path),
+    }
 
+
+def run_review_stage(
+    *,
+    plan: ProjectPlan,
+    session_id: str,
+    cfg: LLMRuntimeConfig,
+    prompt_cache: PromptSectionCache,
+) -> dict[str, Any]:
+    summarize_context = _load_summarize_context(plan, session_id)
+    plan_context = _load_plan_context(plan, session_id)
+    review_evidence_payload = _require_output_payload(
+        plan, session_id, f"{plan.project_id}.review.evidence"
+    )
+    render_evidence = review_evidence_payload.get("render_evidence")
+    if not isinstance(render_evidence, list):
+        render_evidence = []
+    render_evidence = [item for item in render_evidence if isinstance(item, dict)]
+    schema_evidence_checks = _build_schema_evidence_checks(plan_context, render_evidence)
     reviewer_payload = {
         "project_id": plan.project_id,
         "title": plan.title,
-        "research_summary": research_summary.strip(),
-        "glossary_terms": glossary_terms,
-        "formula_catalog": formula_catalog,
-        "planner_brief": planner_brief,
-        "storyboard_outline": storyboard_outline,
+        "research_summary": summarize_context["research_summary"],
+        "glossary_terms": summarize_context["glossary_terms"],
+        "formula_catalog": summarize_context["formula_catalog"],
+        "planner_brief": plan_context["planner_brief"],
+        "storyboard_outline": plan_context["storyboard_outline"],
         "review_checkpoints": [item.to_dict() for item in plan.review_checkpoints],
         "render_evidence": render_evidence,
+        "schema_evidence_checks": schema_evidence_checks,
     }
     review_error: str | None = None
     try:
@@ -1203,22 +1639,16 @@ def run_to_review(
             session_id=session_id,
             role_id="reviewer",
             stage=PipelineStage.REVIEW,
+            task_id="review.outputs",
             recipe=reviewer_recipe(),
             payload=reviewer_payload,
             prompt_cache=prompt_cache,
         )
     except LLMRequestError as exc:
         review_error = str(exc)
-        _log_progress(
-            session_id,
-            "review",
-            f"reviewer json failed once error={review_error}; retry_with_contract_hint",
-        )
         retry_payload = {
             **reviewer_payload,
-            "contract_hint": (
-                "Return exactly one JSON object. No markdown, no explanation, no code fence."
-            ),
+            "contract_hint": "Return exactly one JSON object. No markdown, no explanation, no code fence.",
         }
         try:
             review_draft, review_meta = _call_json_role(
@@ -1227,6 +1657,7 @@ def run_to_review(
                 session_id=session_id,
                 role_id="reviewer",
                 stage=PipelineStage.REVIEW,
+                task_id="review.outputs",
                 recipe=reviewer_recipe(),
                 payload=retry_payload,
                 prompt_cache=prompt_cache,
@@ -1234,11 +1665,6 @@ def run_to_review(
             review_error = None
         except LLMRequestError as retry_exc:
             review_error = f"{review_error};retry:{retry_exc}"
-            _log_progress(
-                session_id,
-                "review",
-                f"reviewer json failed twice; fallback_draft error={review_error}",
-            )
             review_draft = {}
             review_meta = {
                 "endpoint": "fallback",
@@ -1249,18 +1675,21 @@ def run_to_review(
             }
     if not isinstance(review_draft, dict):
         review_draft = {}
+    evidence_checks = _merge_evidence_checks(
+        schema_checks=schema_evidence_checks,
+        reviewer_checks=review_draft.get("evidence_checks"),
+    )
     draft_payload = {
         "summary": str(review_draft.get("summary") or "").strip()
         or "AI reviewer draft generated. Awaiting human approval.",
         "decision": "pending_human_confirmation",
         "risk_notes": _coerce_str_list(review_draft.get("risk_notes"), limit=12),
         "must_check": _coerce_str_list(review_draft.get("must_check"), limit=12),
-        "evidence_checks": review_draft.get("evidence_checks", []),
+        "evidence_checks": evidence_checks,
         "checkpoints": [item.to_dict() for item in plan.review_checkpoints],
-        "evidence_path": str(review_evidence_path),
+        "evidence_path": str(output_path_for_key(plan, session_id, f"{plan.project_id}.review.evidence")),
         "llm_generation": {"meta": review_meta, "error": review_error},
     }
-
     persist_agent_message(
         plan=plan,
         session_id=session_id,
@@ -1288,19 +1717,35 @@ def run_to_review(
             "verification_nudge_needed": review_task.verification_nudge_needed,
         },
     )
-    _log_progress(
-        session_id,
-        "review",
-        f"review.draft ready status={review_task.to_status} evidence={review_evidence_path}",
-    )
+    return {
+        "review_status": review_task.to_status,
+        "review_evidence": str(output_path_for_key(plan, session_id, f"{plan.project_id}.review.evidence")),
+    }
 
+
+def run_to_review(
+    plan: ProjectPlan,
+    session_id: str,
+    source_manifest: str,
+) -> dict[str, Any]:
+    """把计划推进到 REVIEW 阶段（含 review.draft）。"""
+    _log_progress(session_id, "run-to-review", f"start project={plan.project_id}")
+    from .stage_orchestrator import run_all
+
+    orchestrated = run_all(
+        plan=plan,
+        session_id=session_id,
+        source_manifest=source_manifest,
+    )
+    review_data = orchestrated.get("runner_results", {}).get("review", {}).get("data", {})
+    rendered_tasks = orchestrated.get("runner_results", {}).get("dispatch", {}).get("data", {}).get("rendered_tasks", [])
     return {
         "project_id": plan.project_id,
         "session_id": session_id,
         "current_stage": plan.current_stage.value,
-        "rendered_tasks": [task.id for task in render_tasks],
-        "review_status": review_task.to_status,
-        "review_evidence": str(review_evidence_path),
+        "rendered_tasks": rendered_tasks,
+        "review_status": review_data.get("review_status", "pending"),
+        "review_evidence": review_data.get("review_evidence"),
     }
 
 

@@ -142,6 +142,8 @@ def _collect_segment_videos(
             record_by_key[output_key] = record
 
     for segment in plan.segments:
+        segment_videos: list[str] = []
+
         # Manim 产物
         manim_key = f"{plan.project_id}.manim.{segment.id}.approved"
         record = record_by_key.get(manim_key)
@@ -150,11 +152,8 @@ def _collect_segment_videos(
             if isinstance(files, list):
                 for item in files:
                     if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
-                        ordered_videos.append(item)
+                        segment_videos.append(item)
                         break
-                else:
-                    continue
-                continue
 
         # HTML 产物：先查 approved record 中的 mp4，没有则现场渲染
         html_key = f"{plan.project_id}.html.{segment.id}.approved"
@@ -162,15 +161,31 @@ def _collect_segment_videos(
         if isinstance(record, dict):
             files = record.get("artifact_files")
             if isinstance(files, list):
+                html_mp4: str | None = None
                 for item in files:
                     if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
-                        ordered_videos.append(item)
+                        html_mp4 = item
                         break
+                if html_mp4:
+                    segment_videos.append(html_mp4)
                 else:
                     # 没有现成 mp4，尝试从 HTML 渲染
                     html_video = _render_html_segment_video(plan, segment.id, files)
                     if html_video:
-                        ordered_videos.append(html_video)
+                        segment_videos.append(html_video)
+
+        # SVG 产物（如存在可用 mp4，同样参与拼接）
+        svg_key = f"{plan.project_id}.svg.{segment.id}.approved"
+        record = record_by_key.get(svg_key)
+        if isinstance(record, dict):
+            files = record.get("artifact_files")
+            if isinstance(files, list):
+                for item in files:
+                    if isinstance(item, str) and item.lower().endswith(".mp4") and Path(item).exists():
+                        segment_videos.append(item)
+                        break
+
+        ordered_videos.extend(segment_videos)
 
     if ordered_videos:
         return ordered_videos

@@ -25,6 +25,7 @@ from .post_produce import finalize_delivery
 from .models import (
     AgentProfile,
     EventType,
+    FailureCategory,
     ExecutionTask,
     InputDocRole,
     InputDocument,
@@ -58,6 +59,7 @@ __all__ = [
     "AgentProfile",
     "CapabilityRef",
     "EventType",
+    "FailureCategory",
     "ExecutionTask",
     "InputDocRole",
     "InputDocument",

@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": [
+    "research_summary",
+    "glossary_terms",
+    "formula_catalog",
+    "style_guide"
+  ],
+  "properties": {
+    "research_summary": { "type": "string" },
+    "glossary_terms": { "type": "array" },
+    "formula_catalog": { "type": "array" },
+    "style_guide": { "type": "array" }
+  }
+}

@@ -300,6 +300,9 @@ def build_agent_profiles(
                 f"{project_id}.research.summary",
                 f"{project_id}.glossary",
                 f"{project_id}.formula.catalog",
+                f"{project_id}.style.guide",
+                f"{project_id}.session.handoff",
+                f"{project_id}.review.evidence",
                 f"{project_id}.asset.manifest",
             ],
             output_contract="只能写入结构化项目状态，不直接替代所有媒体子任务。",
@@ -350,7 +353,7 @@ def build_agent_profiles(
                 output
                 for task in worker_tasks
                 if task.worker == WorkerKind.HTML
-                for output in task.long_term_outputs
+                for output in task.long_term_outputs + task.short_term_outputs
             ],
             output_contract="只负责 HTML 片段及其回传说明，不越权修改其他媒介片段。",
         ),
@@ -364,7 +367,7 @@ def build_agent_profiles(
                 output
                 for task in worker_tasks
                 if task.worker == WorkerKind.MANIM
-                for output in task.long_term_outputs
+                for output in task.long_term_outputs + task.short_term_outputs
             ],
             output_contract="只负责 Manim 片段及其回传说明，不跨写 HTML 或 SVG 产物。",
         ),
@@ -378,7 +381,7 @@ def build_agent_profiles(
                 output
                 for task in worker_tasks
                 if task.worker == WorkerKind.SVG
-                for output in task.long_term_outputs
+                for output in task.long_term_outputs + task.short_term_outputs
             ],
             output_contract="只负责 SVG 片段及其回传说明，失败信息必须进入短期上下文。",
         ),

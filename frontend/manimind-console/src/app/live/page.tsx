@@ -19,6 +19,30 @@ const API_BASE =
 const PROJECT_ID = 'max-function-review-demo';
 const SESSION_ID = 'manual-session';
 
+type TraceItem = {
+  trace_id: string;
+  role_id: string;
+  stage: string;
+  timestamp: string;
+  duration_ms: number;
+  failure_reason?: string | null;
+  schema_validation?: string;
+};
+
+type TraceSummary = {
+  total_traces?: number;
+  failed_traces?: number;
+  by_failure?: Record<string, number>;
+};
+
+type TraceResponse = {
+  project_id: string;
+  session_id: string;
+  total: number;
+  items: TraceItem[];
+  summary?: TraceSummary | null;
+};
+
 async function fetchJson<T>(url: string): Promise<T | null> {
   try {
     const res = await fetch(url, { cache: 'no-store' });
@@ -30,12 +54,17 @@ async function fetchJson<T>(url: string): Promise<T | null> {
 }
 
 export default async function LiveOverviewPage() {
-  const runtime = await fetchJson<RuntimeResponse>(
-    `${API_BASE}/api/projects/${PROJECT_ID}/runtime`
-  );
-  const events = await fetchJson<EventsResponse>(
-    `${API_BASE}/api/projects/${PROJECT_ID}/events?session_id=${SESSION_ID}&limit=50`
-  );
+  const [runtime, events, tracesResp] = await Promise.all([
+    fetchJson<RuntimeResponse>(
+      `${API_BASE}/api/projects/${PROJECT_ID}/runtime`
+    ),
+    fetchJson<EventsResponse>(
+      `${API_BASE}/api/projects/${PROJECT_ID}/events?session_id=${SESSION_ID}&limit=50`
+    ),
+    fetchJson<TraceResponse>(
+      `${API_BASE}/api/projects/${PROJECT_ID}/trace?session_id=${SESSION_ID}&limit=24`
+    ),
+  ]);
 
   const tasks = runtime?.execution_tasks?.execution_tasks ?? [];
   const allEvents = events?.session_events ?? events?.project_events ?? [];
@@ -47,6 +76,9 @@ export default async function LiveOverviewPage() {
   const metrics = transformMetrics(tasks);
   const recentEvents = transformEvents(allEvents);
   const agents = transformAgents(profiles, tasks);
+  const traces = tracesResp?.items ?? [];
+  const traceSummary = tracesResp?.summary ?? null;
+  const failedTraceCount = traces.filter((item) => Boolean(item.failure_reason)).length;
 
   return (
     <>
@@ -118,6 +150,58 @@ export default async function LiveOverviewPage() {
           )}
         </Panel>
       </div>
+
+      <Panel className='p-5'>
+        <div className='mb-4 flex items-center justify-between gap-3'>
+          <div>
+            <h2 className='text-base font-semibold text-slate-900'>LLM Trace</h2>
+            <p className='mt-1 text-xs text-slate-500'>会话级模型调用记录（最近 24 条）</p>
+          </div>
+          <div className='flex items-center gap-2'>
+            <Badge tone={failedTraceCount > 0 ? 'active' : 'success'}>
+              {failedTraceCount > 0 ? `失败 ${failedTraceCount}` : '无失败'}
+            </Badge>
+            <Badge tone='neutral'>总计 {traceSummary?.total_traces ?? traces.length}</Badge>
+          </div>
+        </div>
+
+        {traces.length === 0 ? (
+          <p className='text-sm text-slate-400'>暂无 trace 记录</p>
+        ) : (
+          <div className='space-y-2.5'>
+            {traces.slice(0, 8).map((trace) => {
+              const failed = Boolean(trace.failure_reason);
+              return (
+                <div
+                  key={trace.trace_id}
+                  className='rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5'
+                >
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <div className='flex items-center gap-2'>
+                      <span className='text-sm font-medium text-slate-900'>
+                        {trace.role_id}@{trace.stage}
+                      </span>
+                      <Badge tone={failed ? 'active' : 'success'}>
+                        {failed ? 'failed' : 'pass'}
+                      </Badge>
+                    </div>
+                    <span className='text-xs text-slate-400'>
+                      {new Date(trace.timestamp).toLocaleTimeString()} · {trace.duration_ms}ms
+                    </span>
+                  </div>
+                  {trace.failure_reason ? (
+                    <p className='mt-1 text-xs text-rose-600'>{trace.failure_reason}</p>
+                  ) : (
+                    <p className='mt-1 text-xs text-slate-500'>
+                      schema={trace.schema_validation ?? 'n/a'}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
 
       {agents.length > 0 && (
         <Panel className='p-5'>

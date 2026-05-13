@@ -24,6 +24,8 @@ from .models import (
 )
 from .post_produce import finalize_delivery
 from .review_workflow import apply_human_review_decision
+from .stage_orchestrator import rerun as rerun_stage
+from .trace_store import query_traces
 from .runtime_store import (
     load_execution_task_snapshot,
     persist_agent_message,
@@ -175,6 +177,40 @@ def _configure_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SESSION_ID,
         help="执行链路对应的会话标识",
     )
+
+    rerun_parser = subparsers.add_parser(
+        "rerun",
+        help="按 runner 名称重跑单阶段（可选指定 segment）",
+    )
+    rerun_parser.add_argument("manifest", type=Path)
+    rerun_parser.add_argument("runner_name", type=str)
+    rerun_parser.add_argument(
+        "--segment",
+        type=str,
+        default=None,
+        help="可选：仅重跑指定 segment（主要用于 dispatch）",
+    )
+    rerun_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="重跑对应的会话标识",
+    )
+
+    trace_parser = subparsers.add_parser(
+        "trace",
+        help="查询会话级 LLM trace",
+    )
+    trace_parser.add_argument("manifest", type=Path)
+    trace_parser.add_argument(
+        "--session-id",
+        type=str,
+        default=DEFAULT_SESSION_ID,
+        help="要查询的会话标识",
+    )
+    trace_parser.add_argument("--stage", type=str, default=None)
+    trace_parser.add_argument("--role", type=str, default=None)
+    trace_parser.add_argument("--failed-only", action="store_true")
 
     review_parser = subparsers.add_parser(
         "human-review",
@@ -406,6 +442,44 @@ def main() -> None:
                 {
                     "result": result,
                     "execution_tasks": [task.to_dict() for task in plan.execution_tasks],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "rerun":
+        plan = _build_plan_model_from_manifest(args.manifest)
+        try:
+            result = rerun_stage(
+                plan=plan,
+                session_id=args.session_id,
+                source_manifest=str(args.manifest),
+                runner_name=args.runner_name,
+                segment_id=args.segment,
+            )
+        except (ValueError, RuntimeError, PermissionError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(json.dumps({"result": result}, ensure_ascii=False, indent=2))
+        return
+
+    if args.command == "trace":
+        plan = _build_plan_model_from_manifest(args.manifest)
+        traces = query_traces(
+            plan=plan,
+            session_id=args.session_id,
+            stage=args.stage,
+            role=args.role,
+            failed_only=args.failed_only,
+        )
+        print(
+            json.dumps(
+                {
+                    "project_id": plan.project_id,
+                    "session_id": args.session_id,
+                    "total": len(traces),
+                    "items": traces,
                 },
                 ensure_ascii=False,
                 indent=2,

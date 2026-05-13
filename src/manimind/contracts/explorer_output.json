@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": [
+    "document_findings",
+    "formula_candidates",
+    "glossary_candidates",
+    "story_beats",
+    "risk_flags",
+    "source_highlights"
+  ],
+  "properties": {
+    "document_findings": { "type": "array" },
+    "formula_candidates": { "type": "array" },
+    "glossary_candidates": { "type": "array" },
+    "story_beats": { "type": "array" },
+    "risk_flags": { "type": "array" },
+    "source_highlights": { "type": "array" }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": [
+    "script_outline",
+    "storyboard_master",
+    "handoff_notes"
+  ],
+  "properties": {
+    "script_outline": { "type": "array" },
+    "storyboard_master": { "type": "object" },
+    "handoff_notes": { "type": "object" },
+    "quality_self_check": { "type": "object" }
+  }
+}
